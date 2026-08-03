@@ -1,0 +1,126 @@
+# Publish focusedgaze to PyPI via Trusted Publishing (OIDC) — no API tokens.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ONE-TIME SETUP ON PyPI — do this BEFORE the first tag, or the upload will 403.
+#
+# PyPI's trusted publisher is bound to an exact owner + repository + workflow
+# filename + environment. All four must match or the tokenless upload is
+# rejected. This is the single most common way a first release fails.
+#
+#   1. Log in to https://pypi.org as the account that will OWN the project.
+#      For focusedgaze that is Muhammad Asif Khan's account.
+#
+#   2. If the project does not exist yet, use
+#      https://pypi.org/manage/account/publishing/  ("pending publisher").
+#      If it does, use  Project → Settings → Publishing.
+#
+#   3. Enter EXACTLY:
+#        PyPI project name : focusedgaze
+#        Owner             : muhammad-asifkhan
+#        Repository name   : focusedgaze
+#        Workflow name     : release.yml
+#        Environment name  : pypi
+#
+#      A publisher configured against a different owner — for example
+#      muhammad-asifkhan/focusedgaze — will reject releases from this repository.
+#
+#   4. Repeat on https://test.pypi.org with environment name `testpypi`
+#      for the TestPyPI dry run that Phase 10 requires first.
+#
+# RELEASING
+#   git tag v0.1.0 && git push origin v0.1.0
+#   The tag triggers this workflow. TestPyPI runs first and must succeed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      - name: Check metadata
+        run: python -m twine check dist/*
+
+      # Phase 9's audit, enforced rather than trusted: no model weights, no
+      # personal calibration, no test fixtures may ever reach a release.
+      - name: Assert no forbidden files in the distributions
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib, sys, tarfile, zipfile
+
+          FORBIDDEN = (".onnx", ".task", ".pkl", ".pt", ".pth", ".mp4", ".npz")
+          bad = []
+          for dist in pathlib.Path("dist").iterdir():
+              if dist.suffix == ".whl":
+                  names = zipfile.ZipFile(dist).namelist()
+              else:
+                  with tarfile.open(dist) as t:
+                      names = t.getnames()
+              for n in names:
+                  if n.endswith(FORBIDDEN) or "/tests/" in n or "fixtures" in n:
+                      bad.append(f"{dist.name}: {n}")
+          if bad:
+              print("Forbidden content in distribution:")
+              print("\n".join(bad))
+              sys.exit(1)
+          print("distribution contents clean")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/focusedgaze
+    permissions:
+      id-token: write          # required for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: Publish to PyPI
+    needs: testpypi          # TestPyPI must succeed first (Phase 10)
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/focusedgaze
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

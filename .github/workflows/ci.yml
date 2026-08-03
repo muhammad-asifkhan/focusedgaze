@@ -1,0 +1,61 @@
+# Lint, type-check and test on every push.
+#
+# Rule 5: CI must run without a webcam or a GPU. Anything needing hardware is
+# marked `@pytest.mark.hardware` and excluded by pyproject's default addopts,
+# so this suite is the Tier 1 golden fixtures plus pure unit tests.
+#
+# Runs on Linux deliberately. Windows is the only TESTED platform for v0.1 and
+# the classifiers say so, but proving the pure core imports and computes
+# correctly on Linux is what keeps the platform abstractions (D1) honest.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 and 3.13 are in the supported range but were only INFERRED from
+        # wheel availability during Phase 1. This matrix is what turns that
+        # inference into a tested claim (Phase 9 task).
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[cpu,calibration,dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Type-check
+        run: mypy
+
+      # The base install must work with no ONNX provider, no websockets and no
+      # scikit-learn present, failing with named errors rather than a bare
+      # ImportError (D8). Checked in a throwaway environment so the dev extras
+      # above cannot mask a missing runtime dependency.
+      - name: Core imports with optional dependencies absent
+        run: |
+          python -m venv /tmp/bare
+          /tmp/bare/bin/pip install --quiet -e .
+          /tmp/bare/bin/python -c "import focusedgaze; print('bare import OK', focusedgaze.__version__)"
+
+      - name: Test
+        run: pytest -q --cov=focusedgaze --cov-report=term-missing
