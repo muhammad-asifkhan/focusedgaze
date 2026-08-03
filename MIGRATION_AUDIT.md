@@ -879,7 +879,7 @@ also in commit metadata as well as file contents.
 ## 22. Attempt 1 — the line-wrapped literal
 
 **What was tried.** `git filter-repo --replace-text` with a rules file of literal phrases,
-including `likely an unauthorised redistribution`.
+including a multi-word phrase describing a third party's conduct.
 
 **What happened.** The rewrite reported success. The verification gate — a per-commit grep
 across every blob — found the phrase still present in one commit.
@@ -986,7 +986,7 @@ what blob scanning could not:
 
 ```
 'asifcalm53@gmail.com' in 4 messages   (inside Co-authored-by trailers)
-'licence violation'    in 1 message    (0f990d1, not covered by anything)
+<a characterisation phrase>  in 1 message   (not covered by anything)
 ```
 
 `--replace-text` does not touch messages, and the trailer-stripping callback would not have
