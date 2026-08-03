@@ -683,6 +683,65 @@ python -m twine upload dist/*      # from Asif's PyPI account
 irreversible outward-facing action under someone else's identity. The deviation from
 Phase 1 stands, now with the artifact ready.
 
+## 19a. Line endings
+
+`.gitattributes` added (`* text=auto eol=lf`, plus `binary` for every image, archive,
+model and video format). Git had warned about LF/CRLF conversion on 16 files across the
+first commits and it went unaddressed; with two Windows developers and Linux CI, the
+outcome would otherwise depend on each machine's `core.autocrlf` and surface as
+whole-file phantom diffs.
+
+**`git add --renormalize .` changed nothing, and no second commit was made.** Git had
+already normalised these files to LF when they were staged, so the index was correct
+already — the warning described the *checkout* direction, not the stored bytes.
+Verified with `git ls-files --eol`: every non-empty tracked file is `i/lf`. (Two entries
+report `i/none`; both are genuinely empty files, `py.typed` and `tests/golden/__init__.py`.)
+The attributes file makes the guarantee explicit and durable rather than incidental.
+
+## 19b. Correction — `Co-authored-by` was over-applied
+
+The trailer asserts shared authorship of a *specific commit*. Phases 0 and 1 were written
+by one person, so `fe201ec`, `40767f5`, `637f134` and `fafdea8` carry a trailer they
+should not.
+
+**Not rewriting them.** Four commits of history churn to correct a metadata line is a
+worse trade than an inaccurate trailer already committed, and rewriting would invalidate
+the hashes recorded elsewhere in this document. The correction lives here instead.
+
+From this point the trailer is used only where work is genuinely joint.
+
+Related: the repository-local `user.name` was a GitHub handle (`muhammad-asifkhan`); it is now the
+real name, **Muhammad Asif Khan `<email redacted>`**. Still deliberately local to this
+repository, so it should be changed if the machine changes hands.
+
+## 19c. CI matrix — a red first run is the expected result
+
+`ci.yml` installs `mediapipe` and `opencv-python` on **Linux** across 3.12/3.13/3.14.
+Wheel availability there is **inferred, not verified**, and differs from Windows — §15
+records that I only ever installed on 3.14, and only on Windows.
+
+The first CI run is therefore expected to fail, and that failure is the deliverable, not
+an obstacle. **When it fails I will report the specific `(python-version, package)` pairs
+that have no wheel — I will not quietly drop rows from the matrix to make it green.**
+Narrowing `requires-python` or the classifiers, if warranted, is a decision that follows
+from that evidence.
+
+Note the workflows cannot run yet: there is no GitHub remote. The first run happens when
+`muhammad-asifkhan/focusedgaze` is created and this repository is pushed.
+
+## 19d. Phase 2 gate condition
+
+The Phase 2 gate **stays open until the Tier 2 replay passes**, regardless of how much
+code is extracted.
+
+`landmarks.py` and `model.py` are the only modules Tier 2 covers, and they carry the two
+highest-risk edits in the phase: the `_smoothed_bbox` module global becomes instance
+state, and the yaw/pitch decode — where the ONNX graph's output *names* are wrong — is
+rewritten. Tier 1 cannot see either of them. Extracting them without the replay would be
+refactoring the riskiest code in the migration with no safety net over it.
+
+Work proceeds on `positioning.py` (Tier 1 covered) in the meantime.
+
 ## 20. Q9 — answered
 
 `LICENSE` names Muhammad Asif Khan alone; `NOTICE` §0 and the README credit Muhammad Asif Khan
