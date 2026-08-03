@@ -105,6 +105,27 @@ drop matrix rows to force green.**
 8. **Ask before inventing.** A model URL, a checksum, a licence term, a platform claim — if
    it is not in the repo or in these instructions, ask.
 
+9. **Document everything, as you do it.** Every phase, decision, failure and fix gets
+   written down in the same turn it happens — not batched, not deferred to the end.
+
+   - `MIGRATION_AUDIT.md` gains a section for every phase gate, every deviation, every bug
+     found, and every decision made. Include what was tried, what failed, why, and what the
+     fix was. **Failures are the most valuable entries; never quietly drop one that got
+     resolved.**
+   - Every commit message explains **why**, not just what. Keep the standard of the
+     existing ones.
+   - Every new module gets a docstring explaining its purpose and anything non-obvious
+     carried over from the legacy code.
+   - Every non-obvious workaround gets an inline comment naming the reason — e.g. the ONNX
+     tensor-order defect, or the `filter-repo` comment-syntax trap.
+   - `CHANGELOG.md` gets an entry per phase.
+   - This brief gets updated when a decision changes the plan.
+   - Anything a future reader would need in order to not repeat a mistake goes in writing
+     **before the turn ends**.
+
+   Assume the reader is someone joining this project in six months with no context —
+   including the people who wrote it.
+
 ---
 
 ## Part D — Remaining work
