@@ -35,6 +35,11 @@ class FakeLandmark:
         self.x, self.y, self.z = x, y, z
 
 
+def _degenerate() -> list[FakeLandmark]:
+    """All landmarks coincident: irises under a pixel apart, no distance possible."""
+    return [FakeLandmark(0.5, 0.5) for _ in range(478)]
+
+
 def _landmarks(ipd_frac: float, nose_dx: float) -> list[FakeLandmark]:
     cx, cy = 0.5 + nose_dx, 0.5
     lm = [FakeLandmark(0.5, 0.5) for _ in range(478)]
@@ -44,29 +49,42 @@ def _landmarks(ipd_frac: float, nose_dx: float) -> list[FakeLandmark]:
     return lm
 
 
-def _golden() -> dict:
-    path = FIXTURES / "positioning_gate.json"
+def _golden(name: str) -> dict:
+    path = FIXTURES / name
     if not path.exists():
         pytest.skip("fixture missing — run tests/golden/record_tier1.py")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_matches_legacy_recording() -> None:
-    """Distance, offsets, flags and zone must all be unchanged.
+@pytest.mark.parametrize("fixture", ["positioning_gate.json", "positioning_gate_nofocal.json"])
+def test_matches_legacy_recording(fixture: str) -> None:
+    """Distance, offsets, flags and zone must all be unchanged — on BOTH branches.
 
-    The fixture records the focal calibration that was in effect when it was
-    made, so the comparison is against a known context rather than whatever the
-    working directory happens to imply.
+    `positioning_gate.json` was recorded with a measured focal length reachable;
+    `positioning_gate_nofocal.json` with it out of reach, so the legacy gate fell
+    back to the assumed-HFOV formula. Only running the first would leave the
+    fallback unproven, and that is the branch every user without a measured
+    focal length actually uses — a wrong half-angle or a missing degrees
+    conversion would sail through a suite that tested the measured path alone.
+
+    Here the branch is chosen by an ARGUMENT rather than by a file's presence,
+    which is the whole point of the extraction.
     """
-    data = _golden()
+    data = _golden(fixture)
     override = data.get("focal_override")
     focal = FocalCalibration(float(override[0]), int(override[1])) if override else None
     gate = PositioningGate(focal=focal)
     frame_shape = tuple(data["frame_shape"])
 
     for case in data["cases"]:
-        st = gate.evaluate(_landmarks(case["ipd_frac"], case["nose_dx"]), frame_shape)
-        label = f"ipd={case['ipd_frac']} dx={case['nose_dx']}"
+        ipd = case["ipd_frac"]
+        lm = _landmarks(ipd, case["nose_dx"]) if ipd > 0 else _degenerate()
+        st = gate.evaluate(lm, frame_shape)
+        label = f"{fixture} ipd={ipd} dx={case['nose_dx']}"
+
+        if case.get("result_is_none"):
+            assert st is None, f"{label}: expected no reading from degenerate geometry"
+            continue
         assert st is not None, label
         assert abs(st.distance_cm - case["distance_cm"]) <= TOL, label
         assert abs(st.dx - case["dx"]) <= TOL, label
@@ -75,6 +93,27 @@ def test_matches_legacy_recording() -> None:
         assert st.centered == case["centered"], label
         assert st.in_zone == case["in_zone"], label
         assert st.zone == case["zone"], label
+
+
+def test_fallback_branch_is_actually_different_from_measured() -> None:
+    """Guard against the two fixtures accidentally testing the same thing.
+
+    If a future change made the fallback coincide with the recorded measured
+    focal, both parametrised runs above would pass while proving only one
+    branch. This asserts the fixtures genuinely differ.
+    """
+    a = _golden("positioning_gate.json")
+    b = _golden("positioning_gate_nofocal.json")
+    assert a["focal_override"] is not None
+    assert b["focal_override"] is None
+
+    def first_distance(d: dict) -> float:
+        return next(c["distance_cm"] for c in d["cases"] if not c.get("result_is_none"))
+
+    assert first_distance(a) != first_distance(b), (
+        "measured and fallback focal produced identical distances — "
+        "the fallback branch is not really being exercised"
+    )
 
 
 def test_result_does_not_depend_on_working_directory(tmp_path, monkeypatch) -> None:

@@ -102,15 +102,62 @@ def record_one_euro(OneEuro) -> dict:
         else:
             v = 0.9 + math.sin(i * 1.7) * 0.02        # jitter around a hold
         out.append({"t": t, "raw": v, "filtered": float(f.filter(v, t))})
+
+    # Non-monotonic timestamps. `filter()` only recomputes its frequency when
+    # t > t_prev, and the strictly-increasing signal above never exercises the
+    # other side of that guard. A stalled clock (repeated t) or a clock that
+    # steps backwards is not hypothetical: it is what a paused capture thread
+    # or a re-used timestamp produces. Pinning it here means a refactor cannot
+    # quietly change how a stalled stream behaves.
+    for dup in (0.0, 0.0, -0.5, 0.0):
+        t += dup
+        v = 0.88
+        out.append({"t": t, "raw": v, "filtered": float(f.filter(v, t))})
     return {"description": "OneEuro filter response to ramp + step + jitter",
             "config": cfg, "n": len(out), "samples": out}
 
 
-def record_positioning(gate_mod) -> dict:
-    """Evaluate the positioning gate over synthetic iris/nose geometries."""
-    gate = gate_mod.PositioningGate()
+def record_positioning(gate_mod, use_focal: bool = True) -> dict:
+    """Evaluate the positioning gate over synthetic iris/nose geometries.
+
+    Args:
+        use_focal: When False, the gate is constructed somewhere its
+            ``models/camera_focal.json`` is unreachable, so it falls back to the
+            assumed-HFOV formula.
+
+    Why both are recorded: the legacy gate picks its focal branch by whether a
+    FILE EXISTS, not by an argument. Recording only the calibrated branch would
+    leave the fallback unpinned — and that fallback is the branch every user who
+    has never measured a focal length actually runs. A wrong half-angle or a
+    missing degrees-to-radians conversion would pass a suite that only ever
+    tests the measured path.
+    """
+    if use_focal:
+        gate = gate_mod.PositioningGate()
+    else:
+        # Construct from a directory with no models/ in it, so _load_focal fails
+        # and the gate falls back. Only construction needs the changed cwd.
+        import tempfile
+
+        prev = pathlib.Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                gate = gate_mod.PositioningGate()
+            finally:
+                os.chdir(prev)
+        assert gate._focal_override is None, "expected the fallback branch"
+
     frame_shape = (720, 1280, 3)
     cases = []
+
+    # Degenerate geometry: both irises at the same point, so ipd_px < 1 and the
+    # gate can produce no distance at all. Another branch the grid below never
+    # reaches.
+    degenerate = [FakeLandmark(0.5, 0.5) for _ in range(478)]
+    st_deg = gate.evaluate(degenerate, frame_shape)
+    cases.append({"ipd_frac": 0.0, "nose_dx": 0.0, "result_is_none": st_deg is None})
+
     # Vary inter-pupil separation (=> distance) and nose offset (=> centring).
     for ipd_frac in (0.045, 0.055, 0.065, 0.075, 0.09):
         for nose_dx in (0.0, 0.08, 0.18):
@@ -124,7 +171,7 @@ def record_positioning(gate_mod) -> dict:
                 landmarks[idx] = v
             st = gate.evaluate(landmarks, frame_shape)
             cases.append({
-                "ipd_frac": ipd_frac, "nose_dx": nose_dx,
+                "ipd_frac": ipd_frac, "nose_dx": nose_dx, "result_is_none": False,
                 "distance_cm": float(st["distance_cm"])
                 if st.get("distance_cm") is not None else None,
                 "dx": float(st.get("dx", 0.0)),
@@ -171,7 +218,9 @@ def main() -> int:
         for name, data in (
             ("calibration_apply.json", record_calibration_apply(calibration_utils, model)),
             ("one_euro.json", record_one_euro(gaze_server.OneEuro)),
-            ("positioning_gate.json", record_positioning(positioning_gate)),
+            ("positioning_gate.json", record_positioning(positioning_gate, use_focal=True)),
+            ("positioning_gate_nofocal.json",
+             record_positioning(positioning_gate, use_focal=False)),
         ):
             path = OUT / name
             path.write_text(json.dumps(data, indent=1), encoding="utf-8")

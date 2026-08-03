@@ -70,14 +70,20 @@ def test_one_euro_matches_golden(impl: dict) -> None:
     assert worst <= TOL, f"1-euro filter drifted by {worst:.3e} (tolerance {TOL:.0e})"
 
 
-def test_positioning_gate_matches_golden(impl: dict) -> None:
+@pytest.mark.parametrize("fixture", ["positioning_gate.json", "positioning_gate_nofocal.json"])
+def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
     """Distance, centring and the zone decision must be unchanged.
+
+    Run against BOTH focal branches. The legacy gate selects between a measured
+    focal length and an assumed-HFOV fallback by whether a file exists, so a
+    fixture recorded only with the file present leaves the fallback unpinned —
+    and the fallback is what every user who never measured a focal length runs.
 
     The booleans and the zone string are compared exactly — a gate that changes
     its mind about whether you may calibrate is a behaviour change, however
     small the underlying float move.
     """
-    data = _load("positioning_gate.json")
+    data = _load(fixture)
     mod = impl["positioning"]
     gate = mod.PositioningGate()
     frame_shape = tuple(data["frame_shape"])
@@ -101,12 +107,18 @@ def test_positioning_gate_matches_golden(impl: dict) -> None:
         ipd, dx = case["ipd_frac"], case["nose_dx"]
         cx, cy = 0.5 + dx, 0.5
         landmarks = [FakeLandmark(0.5, 0.5) for _ in range(478)]
-        landmarks[mod.LEFT_IRIS_CENTER] = FakeLandmark(cx - ipd / 2, cy)
-        landmarks[mod.RIGHT_IRIS_CENTER] = FakeLandmark(cx + ipd / 2, cy)
+        if ipd > 0:
+            landmarks[mod.LEFT_IRIS_CENTER] = FakeLandmark(cx - ipd / 2, cy)
+            landmarks[mod.RIGHT_IRIS_CENTER] = FakeLandmark(cx + ipd / 2, cy)
         landmarks[mod.NOSE_TIP] = FakeLandmark(cx, cy)
 
         st = gate.evaluate(landmarks, frame_shape)
-        label = f"ipd={ipd} dx={dx}"
+        label = f"{fixture} ipd={ipd} dx={dx}"
+
+        if case.get("result_is_none"):
+            assert st is None, f"{label}: expected no reading from degenerate geometry"
+            continue
+        assert st is not None, label
 
         if case["distance_cm"] is None:
             assert st.get("distance_cm") is None, label

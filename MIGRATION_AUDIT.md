@@ -742,6 +742,92 @@ refactoring the riskiest code in the migration with no safety net over it.
 
 Work proceeds on `positioning.py` (Tier 1 covered) in the meantime.
 
+## 19e. Fixture branch coverage — audited across all fixtures
+
+The assumed-HFOV fallback was unpinned: `positioning_gate.json` was recorded with
+`camera_focal.json` reachable, so only the measured branch was proven. Fixed, and the
+same question asked of every other fixture.
+
+**Positioning — two fixtures now.**
+
+| Fixture | `focal_override` | Branch |
+|---|---|---|
+| `positioning_gate.json` | `[1073.4275…, 1280]` | measured focal |
+| `positioning_gate_nofocal.json` | `null` | assumed-HFOV fallback |
+
+Recorded from the legacy gate constructed inside a temporary directory, so its relative
+`models/camera_focal.json` lookup genuinely failed. The two branches produce different
+distances (121.24 cm vs the measured branch's value), and a guard test asserts they
+differ — otherwise both parametrised runs could pass while proving one branch.
+
+**Mutation-checked, because "it passes" is not the same as "it would catch a bug".**
+Against the recorded fallback value of `121.243557`:
+
+| Formula | Result | Caught? |
+|---|---|---|
+| correct `w / (2·tan(radians(60)/2))` | `121.243557` | exact match |
+| degrees→radians conversion omitted | `-10.928397` | **caught** |
+| angle not halved | `40.414519` | **caught** |
+
+These are precisely the two errors that would otherwise have sailed through.
+
+**Other unpinned branches found by asking the same question elsewhere:**
+
+- **`one_euro.json`** — the filter only recomputes its sampling frequency when
+  `t > t_prev`, and the recorded signal was strictly increasing, so the other side of
+  that guard was never exercised. A stalled clock (repeated timestamp) or one that steps
+  backwards is not hypothetical: a paused capture thread produces exactly that. Four
+  cases appended — two repeated timestamps, one backwards step, one repeat after it.
+  Fixture is now 124 samples.
+- **`positioning_gate*.json`** — `evaluate()` returns `None` when the irises are under a
+  pixel apart, and the geometry grid never degenerated. A coincident-landmark case is now
+  recorded in both fixtures, with `result_is_none` asserted against the legacy behaviour.
+- **`calibration_apply.json`** — checked, no gap. `apply_calibration(model, …)` takes the
+  model as an argument rather than discovering it from a path, and its only branch is the
+  `[0,1]` clamp, which the grid already spans (±0.72 rad, deliberately wider than the
+  real signal range).
+
+Principle recorded for later phases: **a branch selected by a file's presence, rather
+than by an argument, is unpinned unless it was recorded both ways.** Phase 5's calibration
+profile loading and Phase 6's asset cache are the next two places this will apply.
+
+## 19f. Publication decision needed — MIGRATION_AUDIT.md
+
+**Flagged, not decided. This needs an answer before the first push.**
+
+This file is currently tracked in the repository that will become
+`github.com/muhammad-asifkhan/focusedgaze`. It contains:
+
+1. **Absolute paths from one machine** — `<repo-root>\…` appears in the Phase 0
+   inventory and findings.
+2. **Two personal email addresses** — in §13 and the §3.3 correction.
+3. **A critical assessment of the origin project** — unused dependency pins, a
+   working-directory bug, a version-fragile pickle, `degree=2` vs `degree=3`. All
+   accurate and all useful engineering record; also a public critique of a named
+   collaborator's code.
+4. **§4: a written assessment that a third party's HuggingFace repository is "likely an
+   non-authoritative source"** of Gaze360-derived weights. That is a characterisation
+   about an unverified source, written by me, on inference rather than investigation.
+
+Item 4 is the one I would weigh most heavily. It is a reasonable engineering inference and
+it is why the download policy is what it is — but published as-is it reads as an
+allegation, and the repository owner carries it.
+
+Options, as you framed them:
+
+- **(a) Public as-is** — maximum transparency about how the decisions were reached.
+- **(b) Sanitise** — replace absolute paths with placeholders, drop the personal emails,
+  and rewrite §4 to state the Gaze360 restriction and the policy that follows from it
+  **without characterising anyone's conduct**. The technical record survives intact; only
+  the accusation and the machine-specific details go.
+- **(c) Keep it out of the published tree** — retain it locally or in a private repo, and
+  ship only `NOTICE` + `CHANGELOG` publicly.
+
+**My recommendation is (b)**, because the audit's engineering value is real and worth
+publishing, while none of that value depends on naming a third party's conduct or on
+anyone's home directory layout. But this is your call and the repository is not mine, so
+nothing is pushed until you decide.
+
 ## 20. Q9 — answered
 
 `LICENSE` names Muhammad Asif Khan alone; `NOTICE` §0 and the README credit Muhammad Asif Khan
