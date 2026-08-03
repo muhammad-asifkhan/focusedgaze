@@ -587,6 +587,109 @@ audit says so rather than the README implying otherwise.
 
 ---
 
+---
+
+# PHASE 2 PRELUDE — version control, publishing config, decisions
+
+## 17. Repository
+
+`focusedgaze-sdk/` is now a git repository on branch `main`. `MIGRATION_AUDIT.md`
+moved here from the game-repo root: it documents this package, it is Phase 0's
+deliverable, and it has to be committable with the code it describes.
+
+**`.gitignore` was audited before the first commit**, because a file committed once
+stays in history. Three gaps were closed: `gaze_env/` (this project's conventional venv
+name, previously uncovered), editor/OS junk, and recorded video (`*.mp4/avi/mkv`). Also
+added `*.pt`/`*.pth` alongside `*.onnx`/`*.task`.
+
+A dry run before committing confirmed **43 files tracked, and none of**: model weights,
+`.pkl` calibration profiles, `tests/fixtures/tier2/`, any virtualenv, `__pycache__`, or
+build output.
+
+Commits so far:
+
+| Commit | Contents |
+|---|---|
+| `fe201ec` | Phase 0 — the migration audit |
+| `40767f5` | Phase 1 — skeleton, packaging, golden harness, `core/filters.py` |
+| `637f134` | CI and release workflows |
+
+**Authorship:** the repository-local git identity is set to the person at the keyboard
+(`muhammad-asifkhan <email redacted>`), with `Co-authored-by: Muhammad Asif Khan` trailers,
+so history reflects joint work rather than a single account. **If the machine changes
+hands, `git config user.name/user.email` in this repo should change with it** — it is
+deliberately local, not global.
+
+Per rule 6, every phase gate from here is its own commit.
+
+## 18. Trusted Publishing — configured for the real owner
+
+`.github/workflows/release.yml` is written against **`muhammad-asifkhan/focusedgaze`**,
+with no placeholders. The setup steps are documented inline in the workflow because PyPI
+binds a trusted publisher to four values that must match exactly:
+
+```
+PyPI project    focusedgaze
+Owner           muhammad-asifkhan
+Repository      focusedgaze
+Workflow        release.yml
+Environment     pypi        (and `testpypi` on test.pypi.org)
+```
+
+A publisher configured against `muhammad-asifkhan/focusedgaze` would reject releases from this
+repository with a 403 — the failure mode flagged earlier.
+
+The release pipeline makes TestPyPI a **required predecessor job**, so PyPI cannot be
+reached without a successful dry run. The build job also **fails the release** if any
+distribution contains weights, calibration pickles, or test fixtures — Phase 9 asks for
+that audit by hand; this makes it a gate instead of a habit.
+
+`ci.yml` runs ruff, mypy and the non-hardware suite across 3.12/3.13/3.14, which is what
+converts the *inferred* 3.12/3.13 support (§15) into a tested claim. It also installs
+into a bare venv to prove the base package imports with no ONNX provider, no
+`websockets` and no `scikit-learn` present (D8).
+
+Both workflows validated as YAML.
+
+## 19. PyPI placeholder — recommendation
+
+**Recommendation: publish it now.** Reasons, in order of weight:
+
+1. **The Trusted Publishing config binds the PyPI project name.** A rename late in the
+   migration means reconfiguring the publisher as well as editing the package — two
+   coupled changes at the worst possible moment.
+2. **`focusedgaze` is a guessable name in an active field.** Availability at Phase 0 is
+   not a reservation, and nine phases remain.
+3. **A rename at Phase 9 touches everything**: `pyproject.toml`, `README`, `NOTICE`, the
+   module directory, every import, the workflows, and this audit.
+4. **The cost of publishing is small and bounded.** A `0.0.0` can be yanked; the version
+   number is then unusable, which is irrelevant for a placeholder.
+
+The artifacts are already built and audited, so it is one command:
+
+```bash
+python -m twine upload dist/*      # from Asif's PyPI account
+```
+
+| Artifact | Size | Contents |
+|---|---|---|
+| `focusedgaze-0.0.0-py3-none-any.whl` | 16 KB | 32 files: source, `py.typed`, LICENSE, NOTICE |
+| `focusedgaze-0.0.0.tar.gz` | 25 KB | 36 files |
+
+`twine check` passes on both. Audited: **no weights, no `.pkl`, no fixtures, no
+`__pycache__`** in either. Well inside the <5 MB target.
+
+**I have not published**, and will not — it needs Asif's credentials and it is an
+irreversible outward-facing action under someone else's identity. The deviation from
+Phase 1 stands, now with the artifact ready.
+
+## 20. Q9 — answered
+
+`LICENSE` names Muhammad Asif Khan alone; `NOTICE` §0 and the README credit Muhammad Asif Khan
+Khan as contributor. Current split retained, as instructed. Closed.
+
+---
+
 ## 12. What happens next
 
 Phase 1 is complete and I have stopped at its gate. On your go-ahead I start **Phase 2**
