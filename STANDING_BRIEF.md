@@ -11,27 +11,31 @@ The rewrite failed verification and was correctly rolled back. Do not retry it a
 
 ### A1. Why it failed, and the general lesson
 
-The phrase `likely an non-authoritative source` is **line-wrapped** in the source:
+A rule targeted a multi-word phrase that was **line-wrapped in the source** — the words sat
+on two lines with the indentation of the second between them, like this:
 
 ```
-"likely an
-   non-authoritative source"
+    ... a multi-word phrase that
+    continues on the next line ...
 ```
 
-The literal replacement had a single space, so it never matched — while the replacements on
-either side of it *did* match. The result was a mangled sentence with the allegation still
-present, in a history that reported success.
+The rule was written as a literal with a single space between those words, so it never
+matched. The rules on either side of it *did* match, so the sentence was partly rewritten
+and the target text survived inside it — in a history that reported success.
+
+Two properties made this dangerous rather than merely wrong: the replacement failed
+**silently**, and a file-level "did anything change?" check would have said yes.
 
 **Rule that follows:** a text replacement that silently no-ops is worse than one that errors.
 Never author a replacement without proving it fires.
 
 ### A2. Fix the replacements
 
-1. **Match on single-line fragments only.** Use the shortest distinctive strings that cannot
-   straddle a line break: `non-authoritative source`, `characterisation`,
-   `dorni/SpeakerVid`. Do not write multi-word phrases that span the file's wrap width. If a
-   multi-line block genuinely must be replaced, use a regex with `\s+` between words, not a
-   literal space.
+1. **Match on single-line fragments only.** Use the shortest distinctive string that cannot
+   straddle a line break — one or two words, not a clause. Prefer `widget-identifier` over
+   `the widget identifier that we removed`. Do not write multi-word phrases that approach
+   the file's wrap width. If a multi-line block genuinely must be replaced, use a regex with
+   `\s+` between the words rather than a literal space.
 
 2. **Pre-flight assertion — this is the actual fix.** Before running the rewrite, for every
    entry in the replacements file, grep every commit's blobs and assert the pattern matches
