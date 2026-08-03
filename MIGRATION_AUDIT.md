@@ -1105,6 +1105,91 @@ and this file were therefore opened and read at HEAD after the rewrite, not mere
 
 ---
 
+## 29. The attribution rewrite — third history pass
+
+Executed under the sequence in the standing brief. Two failures surfaced in the dry-run
+clone; the real repository was never touched by either.
+
+### Failure A — the line-wrap bug, hit a second time
+
+The rule was `Arsalan Durrani`, a two-word literal with a single space. In historical blobs
+the name wrapped across lines:
+
+```
+    ... is now addressed to Asif, not to
+    Arsalan.
+
+    ... NOTICE and the README credit Arsalan
+    Durrani as contributor.
+```
+
+The rule matched neither. **This is precisely the failure documented in section 22 and in
+the brief's A1** — the rule that exists to prevent it was written, read, and then walked
+into anyway.
+
+The reason is worth stating plainly: A2 says "single-line fragments only, one or two words,
+never a clause". A two-word *name* felt like it satisfied that. It does not. The test is
+not "is this short" but **"can this string be split by a line break?"** Any multi-word
+literal can.
+
+**Fix.** Single-word rules alongside the two-word one, ordered so the full name is consumed
+first:
+
+```
+Arsalan Durrani==>Muhammad Asif Khan
+Arsalan==>Muhammad Asif Khan
+Durrani==>Khan
+```
+
+A wrapped occurrence now yields clumsy text in historical blobs, which the standing
+decision accepts: history is scrubbed, not readable prose.
+
+### Failure B — the documentation defeated its own corruption canary
+
+Section 23 quoted filter-repo's default replacement marker verbatim to explain the
+corruption incident. The gate's canary flags any blob containing that marker, so it fired
+on **the write-up rather than on damage** — three blobs, all this file.
+
+Two distinct problems, both fixed:
+
+1. **At the tip**, the marker is now described rather than reproduced, so the canary stays
+   a reliable signal.
+2. **In history**, a replacement rule scrubs the marker from the older blobs that still
+   contained it.
+
+The general lesson matches the one in section 25 about the brief's A1: **documentation that
+quotes the exact string being removed reintroduces it.** Describe the shape of the problem,
+not its literal text. This has now bitten three times — A1, the failure write-up, and the
+canary — and is the single most repeated mistake in this migration.
+
+### What was executed
+
+| Step | Result |
+|---|---|
+| Fresh pre-rewrite bundle | `focusedgaze.pre-rewrite3-20260804-003242.bundle`, 12 commits |
+| Tip edits committed first | NOTICE, README, `.mailmap` deleted, release.yml, audit, brief |
+| Pre-flight | 7 rules, 7 explicit, 0 implicit, all firing |
+| Dry-run 1 | FAILED — Failure A and B |
+| Dry-run 2 | FAILED — Failure B in history |
+| Dry-run 3 | PASSED |
+| Real repository | Gate PASSED |
+| `reflog expire` + `gc --prune=now` | `in-pack: 124`, `packs: 1`, `garbage: 0` |
+| Old commits reachable | none — seven spot-checked hashes all gone |
+| Identity across all 15 commits | exactly one, author and committer |
+| Tests | 19 passed |
+| Tip prose | read, not merely grepped; no dangling headings or half-sentences |
+
+### Method note
+
+Author and committer were rewritten with **unconditional** `--name-callback` and
+`--email-callback` returning constants, not a mapping from old values. A mapping only
+rewrites the identities it was told about; a constant cannot miss one. That is why the
+verification is `git log --format="%an <%ae>|%cn <%ce>" | sort -u` returning exactly one
+line — an assertion a mapping-based approach could pass while still leaving a stray
+committer untouched.
+
+---
+
 ## 12. What happens next
 
 Phase 1 is complete and I have stopped at its gate. On your go-ahead I start **Phase 2**
