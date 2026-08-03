@@ -1,0 +1,106 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "focusedgaze"
+dynamic = ["version"]                       # single-sourced from __init__.py (D6)
+description = "Webcam eye-gaze tracking: face landmarks, L2CS-Net ONNX inference, per-person calibration, smoothed screen coordinates."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Muhammad Asif Khan", email = "asifcalm53@gmail.com" }]
+maintainers = [{ name = "Muhammad Asif Khan", email = "asifcalm53@gmail.com" }]
+keywords = ["gaze", "eye-tracking", "webcam", "mediapipe", "onnx", "computer-vision"]
+
+# Reference environment is 3.14. Floor set to 3.12 because that is the range I can
+# plausibly test, not the range I hope works (B6). Verified on PyPI before writing:
+# onnxruntime, onnxruntime-directml and numpy all publish cp312/cp313/cp314 wheels.
+requires-python = ">=3.12"
+
+# Ranges, not pins. A library that pins exact versions poisons every downstream
+# resolver (D5). Exact pins live in requirements-dev.txt for CI only.
+dependencies = [
+    "numpy>=1.26,<3",
+    "opencv-python>=4.8,<6",
+    "mediapipe>=0.10.9,<2",
+    "platformdirs>=4.0,<5",                 # cache/config paths; A2
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    # Windows only for v0.1. The code is platform-abstracted (D1) but only Windows
+    # is tested, and a classifier is a claim (§3 of the Phase 0 decisions).
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/muhammad-asifkhan/focusedgaze"
+Source = "https://github.com/muhammad-asifkhan/focusedgaze"
+Issues = "https://github.com/muhammad-asifkhan/focusedgaze/issues"
+
+[project.optional-dependencies]
+# ONNX execution providers. The base install is deliberately provider-agnostic:
+# the user picks one, and a missing provider raises a named error rather than a
+# bare ImportError (D1).
+directml    = ["onnxruntime-directml>=1.17,<2"]
+cuda        = ["onnxruntime-gpu>=1.17,<2"]
+cpu         = ["onnxruntime>=1.17,<2"]
+
+# Fitting a calibration needs scikit-learn; APPLYING one does not (D3). scipy is
+# already optional upstream and only adds head-rotation features.
+calibration = ["scikit-learn>=1.3,<2", "scipy>=1.11,<2"]
+
+server      = ["websockets>=12,<17"]
+
+# One-time PyTorch -> ONNX conversion. NOTE: this deliberately does NOT declare
+# `l2cs`, which is only installable from a git URL. PyPI rejects direct-URL
+# dependencies in any dependency list, including extras, so declaring it here
+# would make the wheel unpublishable (DEV-1). The CLI's export command prints
+# the manual install instruction.
+export      = ["torch>=2.0", "torchvision>=0.15", "onnx>=1.15"]
+
+dev         = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11", "build>=1.2", "twine>=5"]
+
+[project.scripts]
+focusedgaze = "focusedgaze.cli:main"
+
+[tool.hatch.version]
+path = "src/focusedgaze/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/focusedgaze"]
+
+[tool.hatch.build]
+# Never ship weights, fixtures, or anyone's personal calibration (Phase 9 audit).
+exclude = [
+    "tests/**",
+    "**/*.onnx",
+    "**/*.task",
+    "**/*.pkl",
+    "**/__pycache__",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "hardware: needs a real webcam or GPU; excluded from CI (rule 5)",
+]
+addopts = "-m 'not hardware'"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]

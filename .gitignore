@@ -1,0 +1,55 @@
+# A file committed once stays in history. Everything below is excluded
+# deliberately; read NOTICE before relaxing any of it.
+
+# Build artefacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# Environments. gaze_env is this project's conventional venv name; the generic
+# ones are here because a contributor's tooling may choose any of them.
+.venv/
+venv/
+env/
+ENV/
+gaze_env/
+
+# Model weights — NEVER committed and never shipped in a wheel. The gaze model
+# derives from Gaze360, which is restricted to non-commercial research use, and
+# this project neither distributes nor mirrors it. See NOTICE.
+*.onnx
+*.task
+*.pt
+*.pth
+
+# Calibration profiles are personal data: derived from one person's eyes.
+*.pkl
+
+# Tier 2 golden fixtures: recorded webcam frames contain a real face. Only the
+# numeric Tier 1 fixtures (tests/fixtures/tier1/*.json) are committed, and
+# test_golden_tier1.py asserts that stays true.
+tests/fixtures/tier2/
+
+# Recorded video, from any source
+*.mp4
+*.avi
+*.mkv
+
+# Secrets
+.env
+*.pypirc
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

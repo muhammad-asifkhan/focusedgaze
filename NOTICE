@@ -1,0 +1,85 @@
+focusedgaze — third-party components and model licensing
+========================================================
+
+The focusedgaze SOURCE CODE is licensed under the MIT License (see LICENSE).
+That licence covers this project's own code and nothing else.
+
+
+0. Authors and contributors
+---------------------------
+
+  Muhammad Asif Khan  <email redacted>   author, maintainer
+    https://github.com/muhammad-asifkhan
+
+  Muhammad Asif Khan     <email redacted>   contributor
+    https://github.com/muhammad-asifkhan
+    The gaze pipeline this package extracts was built as part of the
+    gaze-controlled game project at github.com/the originating game repository.
+
+The MIT LICENSE names a single copyright holder, which is the usual form. This
+section credits contribution, which is a separate matter from copyright
+ownership. If the contributors need to be named in the copyright line itself,
+that is a decision for the authors, not a packaging detail — see
+MIGRATION_AUDIT.md.
+
+This package does NOT distribute, bundle, mirror, or automatically download any
+gaze model weights. Read this file before using it for anything commercial.
+
+
+1. Gaze model weights — RESTRICTED
+----------------------------------
+
+focusedgaze runs an ONNX export of L2CS-Net trained on the Gaze360 dataset
+(commonly distributed as `L2CSNet_gaze360.pkl`, converted locally to
+`l2cs_gaze360.onnx`).
+
+  * L2CS-Net source code — MIT License
+    https://github.com/Ahmednull/L2CS-Net
+
+  * Gaze360 dataset and derived models — NON-COMMERCIAL RESEARCH USE ONLY
+    https://github.com/erkil1452/gaze360
+    The Gaze360 authors state: "The usage of the dataset and the code is for
+    non-commercial research use only."
+
+Model weights trained on Gaze360 are normally treated as a derived work and
+carry the same restriction. Therefore:
+
+  * This project does not distribute those weights.
+  * This project does not host or mirror them.
+  * `focusedgaze download-models` deliberately does NOT fetch them. It prints
+    the upstream source and this restriction, and stops.
+  * You obtain the weights yourself, from the official L2CS-Net distribution
+    linked in that project's README, and convert them locally with
+    `focusedgaze export-onnx`.
+  * You are responsible for your own compliance with the Gaze360 terms.
+
+The MIT classifier on this package describes THIS PACKAGE'S CODE. It makes no
+claim about the licence of any model you choose to load into it.
+
+This is a conservative reading of the upstream terms, not legal advice. If a
+qualified review finds the restriction does not apply, this policy can be
+relaxed; it will not be tightened.
+
+
+2. MediaPipe face landmarker — permissive
+-----------------------------------------
+
+`face_landmarker.task` is published by Google under the Apache License 2.0 and
+is downloaded automatically from Google's own hosting, with SHA-256
+verification. https://ai.google.dev/edge/mediapipe
+
+
+3. Runtime dependencies
+-----------------------
+
+  MediaPipe        Apache-2.0
+  OpenCV (opencv-python)  Apache-2.0
+  NumPy            BSD-3-Clause
+  ONNX Runtime     MIT
+  platformdirs     MIT
+  scikit-learn     BSD-3-Clause   (calibration extra; fitting only)
+  SciPy            BSD-3-Clause   (calibration extra; optional)
+  websockets       BSD-3-Clause   (server extra)
+
+Each remains under its own licence. Installing focusedgaze does not relicense
+any of them.
