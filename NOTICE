@@ -5,22 +5,11 @@ The focusedgaze SOURCE CODE is licensed under the MIT License (see LICENSE).
 That licence covers this project's own code and nothing else.
 
 
-0. Authors and contributors
----------------------------
+0. Author
+---------
 
   Muhammad Asif Khan   author, maintainer
     https://github.com/muhammad-asifkhan
-
-  Muhammad Asif Khan      contributor
-    https://github.com/muhammad-asifkhan
-    The gaze pipeline this package extracts was built as part of the
-    gaze-controlled game project at github.com/the originating game repository.
-
-The MIT LICENSE names a single copyright holder, which is the usual form. This
-section credits contribution, which is a separate matter from copyright
-ownership. If the contributors need to be named in the copyright line itself,
-that is a decision for the authors, not a packaging detail — see
-MIGRATION_AUDIT.md.
 
 This package does NOT distribute, bundle, mirror, or automatically download any
 gaze model weights. Read this file before using it for anything commercial.

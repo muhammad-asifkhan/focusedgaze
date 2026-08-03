@@ -84,4 +84,3 @@ MIT for this code — see [LICENSE](LICENSE).
 The gaze model weights it consumes are **not** MIT — see [NOTICE](NOTICE).
 
 Author: Muhammad Asif Khan · <https://github.com/muhammad-asifkhan>
-Contributor: Muhammad Asif Khan · <https://github.com/muhammad-asifkhan>

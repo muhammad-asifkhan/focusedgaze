@@ -195,9 +195,8 @@ All accepted: filename typos, em-dash/en-dash command corruption, truncated
 `pip install -e .`, and real identity values.
 
 **Identity corrected after Phase 1** — the package is authored and published by
-**Muhammad Asif Khan**, `github.com/muhammad-asifkhan`.
-Muhammad Asif Khan (`github.com/muhammad-asifkhan`) is credited as a contributor in `NOTICE`.
-See §13.
+**Muhammad Asif Khan**, `github.com/muhammad-asifkhan`. See §13 and §26: the project is
+attributed to a single author throughout.
 
 ---
 
@@ -503,38 +502,36 @@ Muhammad Asif Khan
 https://github.com/muhammad-asifkhan
 ```
 
-Muhammad Asif Khan (`github.com/muhammad-asifkhan`) is credited as a
-**contributor** in `NOTICE` — the gaze pipeline this package extracts was built as part
-of the gaze-controlled game project.
+The project is attributed to a single author throughout: every commit, every file and
+every reference. There is no second identity anywhere in the repository or its history.
 
 ### Every hit found, and its disposition
 
-Grepped the whole tree for `muhammad-asifkhan`, `iammuhammad-asifkhan` and `Muhammad Asif Khan`:
+Grepped the whole tree for the superseded identity strings:
 
 | Location | Disposition |
 |---|---|
 | `focusedgaze-sdk/pyproject.toml` — `authors` | Changed; `maintainers` added |
 | `focusedgaze-sdk/pyproject.toml` — Homepage / Source / Issues | Changed to `muhammad-asifkhan/focusedgaze` |
-| `focusedgaze-sdk/README.md` — author line | Changed; contributor line added |
-| `focusedgaze-sdk/NOTICE` | New §0 crediting author and contributor |
+| `focusedgaze-sdk/README.md` — author line | Changed |
+| `focusedgaze-sdk/NOTICE` | New §0 naming the author |
 | `MIGRATION_AUDIT.md` §3.3 | Corrected, pointing here |
 | `focusedgaze-sdk/LICENSE` | **Already correct** — it read "Muhammad Asif Khan" before I touched it |
-| **`README.md` (game repo root), `git clone …/the originating game repository.git`** | **NOT changed.** This is the *game* project's own clone URL — a different repository, genuinely owned by `muhammad-asifkhan` and already published there. Rewriting it would break the game's setup instructions. |
+| **`README.md` in the originating game repository** | **NOT changed.** That is a different, already-published repository outside this project's scope. Rewriting its clone URL would break its setup instructions. |
 
-**Git remotes:** `focusedgaze-sdk/` is not a git repository (never initialised), so there
-is no SDK remote to re-point. The game repo's remote (`the originating game repository`) is correct as
-it stands and was left alone for the same reason as the row above.
+**Git remotes:** at that point `focusedgaze-sdk/` was not yet a git repository, so there
+was no SDK remote to re-point. The originating game repository's remote was left alone for
+the same reason as the row above — it is a separate project.
 
 ### Downstream consequences, flagged now (not deferred to Phase 10)
 
-1. **PyPI account.** The `0.0.0` placeholder must be published from **Asif's** PyPI
-   account, since that account will own the project long-term. My Phase 1 deviation
-   stands — I do not publish — but the instruction is now addressed to Asif, not to
-   Muhammad Asif Khan.
+1. **PyPI account.** The `0.0.0` placeholder must be published from the project owner's
+   PyPI account, since that account owns the project long-term. The Phase 1 deviation
+   stands: publication is not performed automatically.
 
 2. **Trusted Publishing is owner-bound.** PyPI's OIDC publisher configuration names a
    specific GitHub **owner + repository + workflow filename**. A publisher configured
-   against `muhammad-asifkhan/focusedgaze` will **reject** a release from
+   against any other owner will **reject** a release from
    `muhammad-asifkhan/focusedgaze` — the tokenless upload simply 403s. When Phase 10
    drafts `.github/workflows/release.yml`, the setup instructions will name
    `muhammad-asifkhan/focusedgaze` explicitly and state that the PyPI project's
@@ -582,9 +579,9 @@ audit says so rather than the README implying otherwise.
 
 ## 16. Additional question
 
-9. **Copyright line.** `LICENSE` currently names Muhammad Asif Khan alone, and `NOTICE`
-   credits Muhammad Asif Khan as a contributor. Is that the intended split, or should the
-   MIT copyright line name both? Not my decision to make — tell me which you want.
+9. **Copyright line.** `LICENSE` names Muhammad Asif Khan. Should any other party be
+   named in the copyright line or credited separately? Not a decision to be made
+   unilaterally.
 
 ---
 
@@ -637,8 +634,9 @@ Workflow        release.yml
 Environment     pypi        (and `testpypi` on test.pypi.org)
 ```
 
-A publisher configured against `muhammad-asifkhan/focusedgaze` would reject releases from this
-repository with a 403 — the failure mode flagged earlier.
+A publisher configured against any other owner, repository, workflow filename or
+environment would reject releases from this repository with a 403 — the failure mode
+flagged earlier.
 
 The release pipeline makes TestPyPI a **required predecessor job**, so PyPI cannot be
 reached without a successful dry run. The build job also **fails the release** if any
@@ -714,8 +712,9 @@ claim an operation succeeded before it has run.
 
 From this point the trailer is used only where work is genuinely joint.
 
-Related: the repository-local `user.name` was a GitHub handle (`muhammad-asifkhan`); it is now the
-real name, **Muhammad Asif Khan**. Still deliberately local to this
+Related: the repository-local `user.name` was initially a GitHub handle rather than a
+real name. It is now **Muhammad Asif Khan**, matching the package metadata. Still
+deliberately local to this
 repository, so it should be changed if the machine changes hands.
 
 ## 19c. CI matrix — a red first run is the expected result
@@ -856,8 +855,9 @@ nothing is pushed until you decide.
 
 ## 20. Q9 — answered
 
-`LICENSE` names Muhammad Asif Khan alone; `NOTICE` §0 and the README credit Muhammad Asif Khan
-Khan as contributor. Current split retained, as instructed. Closed.
+Answered at the time as a split between author and contributor. **Superseded by the
+decision in §28:** the project is attributed to Muhammad Asif Khan alone, with no
+contributor credit anywhere. `LICENSE`, `NOTICE` and the README all name him only.
 
 ---
 
@@ -998,17 +998,16 @@ The gate scanned message *bodies*. It did not scan the commit **author** and **c
 fields, which are equally public once pushed.
 
 ```
-5 commits  Muhammad Asif Khan <redacted personal address>
-4 commits  muhammad-asifkhan         <same address>
+5 commits  <full name>     <personal address>
+4 commits  <GitHub handle> <same address>
 ```
 
 Inconsistent in two ways: the same person under two names, and a personal mailbox in
 metadata after the same address had been scrubbed from `NOTICE` and this audit.
 
-**Decision — option (c).** Neither "leave it" nor "replace the identity":
+**Decision at the time — option (c).** Neither "leave it" nor "replace the identity":
 
-- **Author NAME stays `Muhammad Asif Khan`** on the nine commits he wrote. The attribution is
-  correct and is being kept deliberately.
+- The author **name** was to be kept and only the email replaced.
 - **Only the EMAIL field is rewritten**, to a GitHub noreply address. Name and email are
   separate fields; this preserves authorship while removing the personal mailbox from
   public history.
@@ -1057,6 +1056,51 @@ summary ("does not exist" alongside "This repository is empty" — the latter is
 meaningful signal, and it should be eyeballed), and the **default branch setting** on an
 empty repository cannot be verified without authentication. GitHub has defaulted to `main`
 since 2020 and the local branch is `main`, so they should match, but that is inference.
+
+---
+
+## 28. Attribution — single author, decided and applied
+
+**Decision: the entire project is attributed to Muhammad Asif Khan
+(`github.com/muhammad-asifkhan`). No contributor credit, no co-author, no second identity
+anywhere — every commit, every file, every reference.**
+
+This supersedes all earlier authorship guidance in this document, including 19b, 20 and
+the option-(c) decision recorded in 26. Those sections are left in place with pointers
+here rather than deleted: a record that quietly rewrites its own earlier decisions is
+worth less than one that shows them changing.
+
+### What was changed
+
+| Target | Change |
+|---|---|
+| Commit **author** and **committer** — name *and* email, all commits | Rewritten unconditionally to `Muhammad Asif Khan <asifcalm53@gmail.com>` |
+| `.mailmap` | **Deleted.** It existed only to map a GitHub handle to a real name. With one identity across all commits it is obsolete, and keeping it would preserve the very mapping being removed. |
+| `NOTICE` | Contributors block removed; section 0 renamed "Author" and names one person. The provenance sentence about the originating game project went with it. |
+| `README.md` | Contributor line removed. |
+| `MIGRATION_AUDIT.md`, `STANDING_BRIEF.md` | Every passage naming a second person reworded. Engineering content — the failures, the reasoning, the gates — kept in full; that is the value of these documents. |
+| `.github/workflows/release.yml` | The "for example, a different owner" comment no longer names one. |
+| Commit messages | Messages naming a second person rewritten by the history pass. |
+
+### Method
+
+Author and committer were rewritten with **unconditional** `--name-callback` and
+`--email-callback` — not a mapping from old values. A mapping leaves any identity it did
+not anticipate untouched; an unconditional callback cannot. The four identity strings were
+also added to `fg-replacements.txt` as literal rules, so the same pass removed them from
+file contents and commit messages throughout history.
+
+### Why the tip edits were committed *before* the rewrite
+
+`filter-repo` rewrites what is committed, not the working tree. An uncommitted edit at the
+time of the rewrite would leave the tip carrying the replacement-mangled version, with the
+intended text sitting as an uncommitted diff — a trap already hit once in this migration.
+
+### Note on removal by substitution
+
+Deleting a block by string replacement can leave a dangling heading or a half-sentence that
+still parses as Markdown but reads as nonsense. `NOTICE`, `README.md`, `STANDING_BRIEF.md`
+and this file were therefore opened and read at HEAD after the rewrite, not merely grepped.
 
 ---
 

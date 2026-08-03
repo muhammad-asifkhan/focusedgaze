@@ -21,8 +21,9 @@
 #        Workflow name     : release.yml
 #        Environment name  : pypi
 #
-#      A publisher configured against a different owner — for example
-#      muhammad-asifkhan/focusedgaze — will reject releases from this repository.
+#      A publisher configured against any other owner, repository, workflow
+#      filename or environment will reject releases from this repository with
+#      a 403. All four values must match exactly.
 #
 #   4. Repeat on https://test.pypi.org with environment name `testpypi`
 #      for the TestPyPI dry run that Phase 10 requires first.
