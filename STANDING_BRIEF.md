@@ -126,6 +126,18 @@ drop matrix rows to force green.**
    Assume the reader is someone joining this project in six months with no context —
    including the people who wrote it.
 
+10. **Documentation must not quote what it describes.** Writing up a removed string, a
+    corruption marker, or a scrubbed phrase **reintroduces it** and defeats the check that
+    looks for it. Describe the shape of the problem; never reproduce its literal text.
+
+    This has caused three separate failures in this project: a brief section quoting the
+    phrase whose line-wrapping broke a rewrite, a write-up reintroducing strings the same
+    rewrite had just removed, and a corruption canary firing on the very section that
+    explained the corruption.
+
+    The same reasoning forbids a *rule* that targets a marker a *check* searches for — the
+    detector would scrub its own evidence. See `fg-replacements.README.md`.
+
 ---
 
 ## Part D — Remaining work

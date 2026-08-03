@@ -1190,6 +1190,44 @@ committer untouched.
 
 ---
 
+## 30. The canary disarmed itself — caught before the next rewrite
+
+A rule was added to scrub filter-repo's replacement marker from historical blobs (section
+29, Failure B). `gate.py` detects a corrupting rewrite by searching every blob for that
+same marker.
+
+**With both in place, a genuinely corrupting rewrite would scrub its own evidence before
+the canary ran.** The gate would have reported clean on a repository that had just been
+destroyed — the precise failure mode the canary exists to prevent, reintroduced by the fix
+for a previous failure.
+
+Nothing was harmed: the conflict existed only between the attribution pass and its
+detection, and no rewrite ran while both were present.
+
+### Fix
+
+- **`fg-replacements.txt` emptied.** Every rule in it had been applied and would match
+  nothing anyway, which `preflight.py` treats as a failure. The file's resting state is now
+  empty; rules are added for one specific pass and removed once it lands.
+- **`preflight.py`** reports an empty rules file as the expected between-rewrites state
+  rather than crashing on it.
+- **`fg-replacements.README.md`** carries a standing prohibition: never add a rule targeting
+  the marker the canary searches for. If historical blobs ever legitimately contain it
+  again, scrub it in a **separate pass with the canary temporarily disabled**, and record in
+  this audit that the canary was off and for which pass.
+- **Standing rule 10** added to the brief, generalising it: documentation must not quote
+  what it describes, and no rule may target a string a check depends on.
+
+### Why this is the same mistake as the other three
+
+Rule 10 exists because this project has now produced four instances of one pattern: the
+artefact that describes a problem becomes indistinguishable from the problem. A quoted
+phrase reintroduces the phrase; a quoted marker trips the marker detector; a rule that
+removes the marker blinds the detector. In each case the mechanism was correct and the
+*content* defeated it.
+
+---
+
 ## 12. What happens next
 
 Phase 1 is complete and I have stopped at its gate. On your go-ahead I start **Phase 2**
