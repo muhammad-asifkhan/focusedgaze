@@ -861,6 +861,205 @@ Khan as contributor. Current split retained, as instructed. Closed.
 
 ---
 
+---
+
+# THE SANITISATION EPISODE — full record
+
+Written under standing rule 9. Three attempts were needed; two caused damage. The failures
+are the point of this section: each one was invisible until it did harm, and each was
+declared safe by a check that turned out to be measuring the wrong thing.
+
+## 21. Why the history was rewritten at all
+
+The decision (§19f) was to sanitise `MIGRATION_AUDIT.md` for publication. Editing the file
+was not enough: the original text lived in the first commit and every commit after it, and
+would have been public the moment the repository was pushed. Personal email addresses were
+also in commit metadata as well as file contents.
+
+## 22. Attempt 1 — the line-wrapped literal
+
+**What was tried.** `git filter-repo --replace-text` with a rules file of literal phrases,
+including `likely an unauthorised redistribution`.
+
+**What happened.** The rewrite reported success. The verification gate — a per-commit grep
+across every blob — found the phrase still present in one commit.
+
+**Root cause.** The phrase was **line-wrapped in the source**: the words sat on two lines
+with the second line's indentation between them. The rule was written with a single space,
+so it never matched. The rules on either side of it *did* match, so the sentence was
+partly rewritten and the target text survived inside a mangled sentence.
+
+**Why it was dangerous.** The replacement failed *silently*, and a file-level "did anything
+change?" check would have reported success. Only a per-commit content grep caught it.
+
+**Fix.** Rules must be single-line fragments short enough that they cannot straddle a wrap —
+one or two words, never a clause. Recorded as brief A2.
+
+**Recovery.** Restored from a bundle. Nothing lost.
+
+## 23. Attempt 2 — the rules file that rewrote every `#` in the repository
+
+**What was tried.** The corrected rules, in a file annotated with `#` comments explaining
+each rule and the deliberate `pyproject.toml` exclusion. A pre-flight check was written
+first, and reported **PASS on all 10 rules**.
+
+**What happened.** The rewrite replaced **every `#` character in the repository** with
+`the replacement marker`. Every Python comment, every `.gitignore` and `.gitattributes` entry, every
+workflow comment. `.gitattributes` was mangled badly enough that git began emitting
+`is not a valid attribute name` errors on ordinary commands.
+
+**Root cause.** `git filter-repo --replace-text` **has no comment syntax**. Its format is
+one rule per non-empty line; a line without `==>` means "find this, replace it with
+`the replacement marker`". The bare `#` separator lines in the file were therefore rules meaning
+"find every `#`".
+
+**Why the pre-flight missed it — the more important failure.** The pre-flight parsed the
+rules file the way it was *intended* to be read:
+
+```python
+if not line or line.startswith("#") or "==>" not in line:
+    continue          # <- skipped comments; filter-repo does not
+```
+
+It validated a **different interpretation of the input than the tool it was guarding**, so
+it reported PASS on 10 rules while the tool was about to act on roughly 14 more that were
+never shown to anyone. A guard that does not read its input identically to the tool is
+decoration.
+
+**Fixes, all three applied.**
+1. The rules file contains **no comments**. Rationale moved to `fg-replacements.README.md`.
+2. The pre-flight parses the file **exactly as filter-repo does**, reports the total rule
+   count it sees, separates explicit (`==>`) from implicit rules, and **fails loudly** if
+   any implicit rule exists.
+3. A **dry-run into a throwaway clone** became mandatory, with `git diff --stat` against the
+   pre-rewrite state. Corruption that broad is obvious in one `--stat`; that check alone
+   would have caught this before it touched anything real.
+
+**Recovery.** Restored from the fresh bundle. Verified: zero corruption markers in the
+working tree, zero across every blob in every commit, 19 tests passing.
+
+**Why the bundle discipline mattered.** The bundle in hand at that moment was 7 commits
+while HEAD was 8. Restoring from it would have destroyed `STANDING_BRIEF.md`, the sanitised
+audit and the `NOTICE` fix. A fresh bundle was taken first specifically because of that
+gap — hence the standing rule: **a fresh `--all` bundle before every rewrite attempt.**
+
+## 24. Attempt 3 — success, plus a composition trap found in the dry-run
+
+**Pre-checks, all passed before execution.**
+
+- **HEAD-only scan: zero of ten patterns present at the tip.** This closed the
+  tip-versus-history question by evidence rather than argument — if the tip contains none
+  of the patterns, the rewrite cannot damage tip prose. The dry-run's `git diff --stat`
+  against the original tip was consequently **empty**: history changed, tip byte-identical.
+- **Pre-flight: 10 rules, 10 explicit, 0 implicit, all firing.**
+
+**The trap the dry-run caught.** `--replace-message` and `--message-callback` **do not
+compose**. filter-repo implements the former as a message callback internally, so passing
+both is not an error — one silently wins. Measured in the throwaway clone:
+
+| | Result |
+|---|---|
+| `--replace-message` | fired (`licensing provenance` present) |
+| `--message-callback` | **silently ignored** — all 4 `Co-authored-by` trailers survived |
+
+**Fix.** Both jobs now happen in a **single** `--message-callback`, generated from the same
+rules file so blobs and messages share one source of truth (`rewrite.py`). After stripping
+trailers, the only remaining message content needing replacement was one phrase in one
+commit — the email addresses existed *only* inside the trailers.
+
+**A quirk worth recording.** On the real repository `filter-repo` raised an
+`AssertionError` during its post-write repack, *after* the new history was written.
+Assessed before proceeding: `git fsck` clean, 9 commits, hashes identical to the dry-run
+(so the rewrite is deterministic), clean status. The `gc` was completed manually. Nothing
+in the gate suggested the result was affected, but the tool did not exit cleanly and that
+is recorded rather than buried.
+
+**Gate result — all checks clean.** Blob scan clean, corruption canary 0, commit-message
+scan clean, `Co-authored-by` count 0, 9 commits in the correct order. After
+`reflog expire --expire=now --all` and `gc --prune=now`: `in-pack: 100`, `packs: 1`,
+`garbage: 0`, and the four pre-rewrite commits confirmed unreachable.
+
+## 25. What the commit-message scan added
+
+The gate originally walked `ls-tree` blobs only. Extending it to commit messages found
+what blob scanning could not:
+
+```
+'asifcalm53@gmail.com' in 4 messages   (inside Co-authored-by trailers)
+'licence violation'    in 1 message    (0f990d1, not covered by anything)
+```
+
+`--replace-text` does not touch messages, and the trailer-stripping callback would not have
+caught the second. **Messages are as public as file contents**; any future gate covers both.
+
+## 26. Author metadata — the field the gate did not scan
+
+The gate scanned message *bodies*. It did not scan the commit **author** and **committer**
+fields, which are equally public once pushed.
+
+```
+5 commits  Muhammad Asif Khan <redacted personal address>
+4 commits  muhammad-asifkhan         <same address>
+```
+
+Inconsistent in two ways: the same person under two names, and a personal mailbox in
+metadata after the same address had been scrubbed from `NOTICE` and this audit.
+
+**Decision — option (c).** Neither "leave it" nor "replace the identity":
+
+- **Author NAME stays `Muhammad Asif Khan`** on the nine commits he wrote. The attribution is
+  correct and is being kept deliberately.
+- **Only the EMAIL field is rewritten**, to a GitHub noreply address. Name and email are
+  separate fields; this preserves authorship while removing the personal mailbox from
+  public history.
+- Asif remains owner and author of record for the package.
+
+**Status: NOT YET EXECUTED.** The exact noreply address must be supplied — GitHub's form is
+`<ID>+<username>@users.noreply.github.com`, found under Settings → Emails. **It will not be
+guessed** (rule 8). The planned method is `--email-callback`, touching only the email, not
+a full re-filter.
+
+**`.mailmap` added regardless of that decision.** The name inconsistency is a *display*
+problem, and a `.mailmap` fixes it in `git log`, `git shortlog` and forge contributor lists
+**without rewriting a single commit**. Verified: `git shortlog -sne HEAD` collapses all nine
+to one identity. When the email rewrite happens, the mailmap gains a row mapping the old
+address to the canonical one so historical references still resolve.
+
+## 27. Pre-push state — Part B findings
+
+| Check | Result |
+|---|---|
+| GitHub `muhammad-asifkhan/focusedgaze` | Exists, **empty — no commits** |
+| First push | **Clean.** No unrelated-histories problem, nothing to reconcile |
+| Local remote | **None** — `filter-repo` removes remotes by design; must be added fresh |
+| Repo name | Matches `pyproject.toml` and `release.yml` exactly |
+| Local branch | `main` |
+| PyPI `focusedgaze` | **404 — project does not exist** |
+| TestPyPI `focusedgaze` | **404 — project does not exist** |
+| GitHub environments `pypi` / `testpypi` | **Cannot check** — not publicly visible |
+| Pending publisher registered? | **Cannot check** — not publicly visible |
+
+### OPEN ITEM — confirm before the first tag
+
+Neither PyPI project exists. The likely explanation is that a **pending publisher** was
+registered on each: a pending publisher does not create a project and is not publicly
+visible, which fits the observed 404s exactly. If so, everything is correct and
+`release.yml` — whose inline instructions assume the pending-publisher path — needs no
+change.
+
+**This must be confirmed with Asif before the first tag.** The difference between "pending
+publisher registered" and "nothing registered" surfaces only as a **403 at upload time**,
+which is the worst possible moment to discover it. Both PyPI and TestPyPI need checking
+**separately**; they are independent registrations.
+
+Two caveats on these findings: the GitHub check returned a slightly self-contradictory
+summary ("does not exist" alongside "This repository is empty" — the latter is the
+meaningful signal, and it should be eyeballed), and the **default branch setting** on an
+empty repository cannot be verified without authentication. GitHub has defaulted to `main`
+since 2020 and the local branch is `main`, so they should match, but that is inference.
+
+---
+
 ## 12. What happens next
 
 Phase 1 is complete and I have stopped at its gate. On your go-ahead I start **Phase 2**
