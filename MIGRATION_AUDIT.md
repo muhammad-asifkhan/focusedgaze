@@ -904,13 +904,14 @@ each rule and the deliberate `pyproject.toml` exclusion. A pre-flight check was 
 first, and reported **PASS on all 10 rules**.
 
 **What happened.** The rewrite replaced **every `#` character in the repository** with
-`the replacement marker`. Every Python comment, every `.gitignore` and `.gitattributes` entry, every
+filter-repo's default replacement marker. Every Python comment, every `.gitignore`
+and `.gitattributes` entry, every
 workflow comment. `.gitattributes` was mangled badly enough that git began emitting
 `is not a valid attribute name` errors on ordinary commands.
 
 **Root cause.** `git filter-repo --replace-text` **has no comment syntax**. Its format is
 one rule per non-empty line; a line without `==>` means "find this, replace it with
-`the replacement marker`". The bare `#` separator lines in the file were therefore rules meaning
+that marker". The bare `#` separator lines in the file were therefore rules meaning
 "find every `#`".
 
 **Why the pre-flight missed it — the more important failure.** The pre-flight parsed the
