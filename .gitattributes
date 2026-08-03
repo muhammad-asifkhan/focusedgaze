@@ -1,0 +1,21 @@
+# Line endings are normalised in the repository, whatever a developer's
+# core.autocrlf happens to be set to. Without this, two Windows machines and a
+# Linux CI runner produce whole-file phantom diffs that bury real changes.
+#
+# text=auto  -> git decides what is text
+# eol=lf     -> text is stored AND checked out as LF everywhere
+* text=auto eol=lf
+
+# Binary formats: never touch these bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.npz binary
+*.onnx binary
+*.task binary
+*.pkl binary
+*.pt binary
+*.pth binary
+*.mp4 binary
+*.docx binary
+*.pdf binary
