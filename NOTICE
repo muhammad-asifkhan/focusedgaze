@@ -8,10 +8,10 @@ That licence covers this project's own code and nothing else.
 0. Authors and contributors
 ---------------------------
 
-  Muhammad Asif Khan  <email redacted>   author, maintainer
+  Muhammad Asif Khan   author, maintainer
     https://github.com/muhammad-asifkhan
 
-  Muhammad Asif Khan     <email redacted>   contributor
+  Muhammad Asif Khan      contributor
     https://github.com/muhammad-asifkhan
     The gaze pipeline this package extracts was built as part of the
     gaze-controlled game project at github.com/the originating game repository.

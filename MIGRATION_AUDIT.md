@@ -127,15 +127,16 @@ Gaze360. A model trained on a non-commercial-research-only dataset is normally t
 as a derived work carrying the same restriction. Three consequences:
 
 1. **We must not ship the weights in the wheel.** Already the plan (B3), now also a
-   legal requirement rather than just a size one.
+   licensing requirement rather than just a size one.
 2. **We must not host a mirror.** The brief listed "publish a mirror" as an option for
    B2; for the *weights* it is not available to us.
-3. **The current download URL is a third-party mirror.** `README.md` §5 fetches
-   `L2CSNet_gaze360.pkl` from a HuggingFace repo
-   (`a third-party model host`) that is unrelated to the Gaze360 or
-   L2CS-Net authors. That is itself likely an non-authoritative source. Pointing an
-   SDK's auto-downloader at it would make the SDK depend on someone else's possible
-   licensing provenance, and it could vanish without notice.
+3. **We must not auto-download the weights from a non-authoritative source.** The origin
+   project's setup instructions fetch `L2CSNet_gaze360.pkl` from a general-purpose model
+   host rather than from the L2CS-Net or Gaze360 authors' own distribution. Regardless of
+   any other consideration, a URL that is not the upstream one is unsuitable for an SDK's
+   automatic downloader: its licensing provenance is not established, and it carries no
+   availability guarantee. The SDK therefore points users at the official L2CS-Net
+   distribution and asks them to obtain the weights themselves.
 
 ### What I did not do
 
@@ -194,7 +195,7 @@ All accepted: filename typos, em-dash/en-dash command corruption, truncated
 `pip install -e .`, and real identity values.
 
 **Identity corrected after Phase 1** — the package is authored and published by
-**Muhammad Asif Khan** `<email redacted>`, `github.com/muhammad-asifkhan`.
+**Muhammad Asif Khan**, `github.com/muhammad-asifkhan`.
 Muhammad Asif Khan (`github.com/muhammad-asifkhan`) is credited as a contributor in `NOTICE`.
 See §13.
 
@@ -498,11 +499,11 @@ DEVIATION — Phase 1
 The package is authored and published by:
 
 ```
-Muhammad Asif Khan  <email redacted>
+Muhammad Asif Khan
 https://github.com/muhammad-asifkhan
 ```
 
-Muhammad Asif Khan (`<email redacted>`, `github.com/muhammad-asifkhan`) is credited as a
+Muhammad Asif Khan (`github.com/muhammad-asifkhan`) is credited as a
 **contributor** in `NOTICE` — the gaze pipeline this package extracts was built as part
 of the gaze-controlled game project.
 
@@ -560,7 +561,7 @@ Fixed in all three files, consistently:
 - A missing directory now prints the variable name and the expected layout, not an
   absolute path from someone else's machine.
 - Documented in both recorder docstrings and here.
-- Verified: no `C:\game`/`c:/game` string remains anywhere under `tests/`, and the suite
+- Verified: no an absolute machine path string remains anywhere under `tests/`, and the suite
   still passes (4 passed, 2 deselected) using only the relative fallback.
 
 **Worth recording plainly:** I found this class of bug in the shipping code (F1, the
@@ -610,12 +611,12 @@ Commits so far:
 
 | Commit | Contents |
 |---|---|
-| `fe201ec` | Phase 0 — the migration audit |
-| `40767f5` | Phase 1 — skeleton, packaging, golden harness, `core/filters.py` |
-| `637f134` | CI and release workflows |
+| 1 | Phase 0 — the migration audit |
+| 2 | Phase 1 — skeleton, packaging, golden harness, `core/filters.py` |
+| 3 | CI and release workflows |
 
 **Authorship:** the repository-local git identity is set to the person at the keyboard
-(`muhammad-asifkhan <email redacted>`), with `Co-authored-by: Muhammad Asif Khan` trailers,
+(the contributor's own identity), with `Co-authored-by: Muhammad Asif Khan` trailers,
 so history reflects joint work rather than a single account. **If the machine changes
 hands, `git config user.name/user.email` in this repo should change with it** — it is
 deliberately local, not global.
@@ -701,17 +702,20 @@ The attributes file makes the guarantee explicit and durable rather than inciden
 ## 19b. Correction — `Co-authored-by` was over-applied
 
 The trailer asserts shared authorship of a *specific commit*. Phases 0 and 1 were written
-by one person, so `fe201ec`, `40767f5`, `637f134` and `fafdea8` carry a trailer they
+by one person, so the first four commits carry a trailer they
 should not.
 
-**Not rewriting them.** Four commits of history churn to correct a metadata line is a
-worse trade than an inaccurate trailer already committed, and rewriting would invalidate
-the hashes recorded elsewhere in this document. The correction lives here instead.
+**Intent (not yet executed at the time of writing):** the trailers are to be dropped from
+the solo commits during the sanitisation history rewrite described in §19f, so that no
+separate history churn is incurred for a metadata line. This paragraph is written in the
+future tense deliberately and will be updated to past tense **only after the verification
+gate in §19f passes** — an audit whose only value is being accurate about itself must not
+claim an operation succeeded before it has run.
 
 From this point the trailer is used only where work is genuinely joint.
 
 Related: the repository-local `user.name` was a GitHub handle (`muhammad-asifkhan`); it is now the
-real name, **Muhammad Asif Khan `<email redacted>`**. Still deliberately local to this
+real name, **Muhammad Asif Khan**. Still deliberately local to this
 repository, so it should be changed if the machine changes hands.
 
 ## 19c. CI matrix — a red first run is the expected result
@@ -791,6 +795,26 @@ Principle recorded for later phases: **a branch selected by a file's presence, r
 than by an argument, is unpinned unless it was recorded both ways.** Phase 5's calibration
 profile loading and Phase 6's asset cache are the next two places this will apply.
 
+### Committed for Phase 5: mutation-check the calibration polynomial
+
+Replacing the pickled scikit-learn pipeline with raw NumPy coefficients is the highest-risk
+numerical swap in the migration, and `calibration_apply.json` currently proves equivalence
+**without having been shown to catch a wrong implementation**. Passing a fixture and being
+sensitive to error are different properties, as the focal-length check demonstrated.
+
+Before that swap is accepted, the fixture must be shown to catch at least:
+
+- **transposed coefficient order** — coefficients applied to the wrong feature
+- **wrong feature-expansion ordering** — `PolynomialFeatures` emits a specific term order
+  (`1, a, b, a², ab, b², …`); assuming a different one silently produces a plausible but
+  wrong surface
+- **x/y coefficient sets swapped** — symmetric-looking and easy to miss
+- **degree mismatch** — fitting or evaluating at degree 2 where the model is degree 3
+  (§F3: the legacy default and the robust path disagree, so this is a live risk)
+
+A wrong polynomial does not crash; it returns a smooth, believable surface that is simply
+in the wrong place. Only sensitivity testing distinguishes that from a correct one.
+
 ## 19f. Publication decision needed — MIGRATION_AUDIT.md
 
 **Flagged, not decided. This needs an answer before the first push.**
@@ -798,28 +822,30 @@ profile loading and Phase 6's asset cache are the next two places this will appl
 This file is currently tracked in the repository that will become
 `github.com/muhammad-asifkhan/focusedgaze`. It contains:
 
-1. **Absolute paths from one machine** — `<repo-root>\…` appears in the Phase 0
-   inventory and findings.
-2. **Two personal email addresses** — in §13 and the §3.3 correction.
+1. **Absolute paths from one machine**, in the Phase 0 inventory and findings.
+2. **Personal email addresses**, in the authorship sections.
 3. **A critical assessment of the origin project** — unused dependency pins, a
-   working-directory bug, a version-fragile pickle, `degree=2` vs `degree=3`. All
-   accurate and all useful engineering record; also a public critique of a named
+   working-directory bug, a version-fragile pickle, an inconsistent polynomial degree.
+   Accurate and useful engineering record, but also a public critique of a named
    collaborator's code.
-4. **§4: a written assessment that a third party's HuggingFace repository is "likely an
-   non-authoritative source"** of Gaze360-derived weights. That is a characterisation
-   about an unverified source, written by me, on inference rather than investigation.
+4. **A characterisation of a third party's conduct** regarding redistribution of
+   Gaze360-derived weights — written on inference rather than investigation.
 
-Item 4 is the one I would weigh most heavily. It is a reasonable engineering inference and
-it is why the download policy is what it is — but published as-is it reads as an
-allegation, and the repository owner carries it.
+Item 4 carried the most weight. The download policy rests on the Gaze360 licence alone
+and does not need it: the restriction is a documented fact, and "not the upstream source"
+is sufficient grounds to reject a URL for an automatic downloader without saying anything
+about whoever published it.
 
-Options, as you framed them:
+**DECISION: option (b), sanitise — applied to the file and to the history.** Absolute
+paths became placeholders, personal emails were removed from the file body, and §4 now
+states the restriction, the derivation and the resulting never-distribute policy without
+characterising anyone. The technical record survives intact.
+
+The options that were weighed:
 
 - **(a) Public as-is** — maximum transparency about how the decisions were reached.
-- **(b) Sanitise** — replace absolute paths with placeholders, drop the personal emails,
-  and rewrite §4 to state the Gaze360 restriction and the policy that follows from it
-  **without characterising anyone's conduct**. The technical record survives intact; only
-  the accusation and the machine-specific details go.
+- **(b) Sanitise** — chosen. The engineering value is real and worth publishing, and none
+  of it depends on naming a third party's conduct or on anyone's home directory layout.
 - **(c) Keep it out of the published tree** — retain it locally or in a private repo, and
   ship only `NOTICE` + `CHANGELOG` publicly.
 
