@@ -17,13 +17,13 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``focusedgaze`` console script."""
     parser = argparse.ArgumentParser(
         prog="focusedgaze",
-        description="Webcam eye-gaze tracking. In development — see MIGRATION_AUDIT.md.",
+        description="Webcam eye-gaze tracking. In development. See MIGRATION_AUDIT.md.",
     )
     parser.add_argument("--version", action="version", version=f"focusedgaze {__version__}")
     parser.parse_args(argv)
 
     # Nothing to run yet. Say so plainly rather than pretending to be a tool.
-    print(f"focusedgaze {__version__} — package skeleton (Phase 1).")
+    print(f"focusedgaze {__version__}: package skeleton (Phase 1).")
     print("No commands are implemented yet; they arrive in Phase 6.")
     return 0
 
