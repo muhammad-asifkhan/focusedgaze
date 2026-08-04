@@ -1,13 +1,14 @@
 # Exact pins for reproducing a known-good development environment.
 #
-# pyproject.toml declares RANGES, which is correct for a library — pinning there
+# pyproject.toml declares RANGES, which is correct for a library: pinning there
 # poisons every downstream resolver (D5). This file is the other half of that
 # decision: the ranges say what is allowed, this says what was actually tested.
 #
 # It is NOT installed by CI. CI deliberately resolves the ranges freshly so that
 # an incompatible new release shows up as a red build rather than being masked by
-# a pin. Use this file when you need to reproduce a specific result — recording a
-# golden fixture, chasing a numeric difference, or bisecting a regression.
+# a pin. Use this file when you need to reproduce a specific result, such as
+# recording a golden fixture, chasing a numeric difference, or bisecting a
+# regression.
 #
 #   pip install -r requirements-dev.txt
 #
@@ -26,7 +27,7 @@
 # The versions below are the SDK venv's, which differ in exactly those two
 # packages and agree on everything else. The ONNX difference was measured at
 # 188x under the 1e-4 rad tolerance and is harmless. The MediaPipe landmark
-# difference is UNMEASURED — it needs a face, and the Tier 2 fixture does not
+# difference is UNMEASURED: it needs a face, and the Tier 2 fixture does not
 # exist yet. Do not treat a cross-venv comparison as meaningful until it does.
 #
 # To reproduce the legacy numbers exactly rather than approximately, additionally:
