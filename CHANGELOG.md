@@ -44,6 +44,29 @@ this file records what changed, per phase.
   fallback), the non-monotonic-timestamp path in the filter, and the degenerate
   geometry case. Previously only the branch reachable when a config file
   happened to exist was covered.
+- Nine lint errors (import ordering, unsorted `__slots__` and `__all__`,
+  `Sequence` from `collections.abc`, redundant quoted annotations). All
+  behaviour-neutral; the golden tests were re-run afterwards rather than
+  assumed.
+- **CI ordering:** `Type-check`, the bare-venv import check and `Test` now run
+  even when `Lint` fails. A hard-failing first step was hiding all three, so a
+  single unsorted `__slots__` concealed every check that mattered — and fixing
+  only the lint would have produced a green run while `mypy --strict` had still
+  never executed.
+
+### Verified
+- **Linux wheel availability resolved.** `mediapipe` and `opencv-python`
+  install and run on Linux across Python **3.12, 3.13 and 3.14** (CI run 2).
+  `requires-python = ">=3.12"` and the 3.12/3.13 classifiers are now tested
+  rather than inferred, closing the Phase 9 wheel task early.
+- **`mypy --strict` passes** on all three versions — first execution.
+- **D8 bare-import guarantee holds:** a venv with no ONNX provider, no
+  `websockets` and no `scikit-learn` imports the package cleanly.
+- **Test suite passes on Linux**, a platform the golden fixtures were never
+  recorded on.
+- Coverage baseline **94%** across the two extracted modules (`filters.py`,
+  `positioning.py`); 87% reported overall, inflated by empty stub modules and
+  deflated by an untested CLI banner.
 
 ### Security / privacy
 - History rewritten to remove absolute machine paths, personal email addresses

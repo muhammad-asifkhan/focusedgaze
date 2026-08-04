@@ -566,16 +566,104 @@ working-directory-dependent positioning gate) and introduced the same class of b
 the test code on the same day. The golden harness is subject to the same engineering
 rules as the package, and I will treat it that way from here.
 
-## 15. Correction to the Phase 1 wheel claim
+## 15. The Phase 1 wheel claim — RESOLVED, verified
 
-The `Programming Language :: Python :: 3.12` and `3.13` classifiers are **inferred, not
-verified**. I confirmed cp312/cp313/cp314 wheels on PyPI for `onnxruntime`,
-`onnxruntime-directml` and `numpy`, but `mediapipe` and `opencv-python` use wheel tags my
-filename check could not resolve, and I have installed on **3.14 only**.
+**Original caveat (Phase 1):** the `Programming Language :: Python :: 3.12` and `3.13`
+classifiers were **inferred, not verified**. cp312/cp313/cp314 wheels were confirmed on
+PyPI for `onnxruntime`, `onnxruntime-directml` and `numpy`, but `mediapipe` and
+`opencv-python` use wheel tags a filename check could not resolve, and installation had
+been done on **3.14 only, on Windows only**.
 
-Added to Phase 9 as a real task: create genuine 3.12 and 3.13 environments and install
-there. Until that passes, those two classifiers are a claim I cannot support, and the
-audit says so rather than the README implying otherwise.
+**RESOLVED — CI run 2 (`14f7b36`), all three matrix rows `success` on Linux.**
+
+| Job | Install | Conclusion |
+|---|---|---|
+| `test (3.12)` | yes | success |
+| `test (3.13)` | yes | success |
+| `test (3.14)` | yes | success |
+
+`mediapipe` and `opencv-python` install and run on Linux across 3.12, 3.13 and 3.14.
+Neither anticipated failure mode occurred: no missing wheel, and no missing system library
+(`opencv-python` on a headless runner often needs `libGL`; it did not here).
+
+**Consequences:**
+
+- `requires-python = ">=3.12"` is **honest and tested**, not inferred.
+- The `3.12` and `3.13` classifiers are **honest and tested**. They stay.
+- **The Phase 9 wheel-verification task is CLOSED, ahead of schedule.** Phase 9 keeps its
+  other items: clean-venv wheel install and distribution content audit.
+
+## 15a. Three guarantees exercised for the first time
+
+The same run was the first execution ever of three checks that had been asserted but never
+run:
+
+| Check | Result | Why it matters |
+|---|---|---|
+| `mypy --strict` on `src/` | **passes** on 3.12/3.13/3.14 | Phase 3's exit criterion, met early for the code that exists |
+| **D8 bare-import guarantee** | **passes** | A venv with `pip install -e .` and no ONNX provider, no `websockets`, no `scikit-learn` imports `focusedgaze` cleanly. A design promise since Phase 0, never previously tested |
+| Test suite on **Linux** | **19 passed** | The golden fixtures reproduce identically on a platform they were never recorded on — evidence the extracted `filters.py` and `positioning.py` are genuinely portable rather than accidentally Windows-shaped |
+
+## 15b. Lesson — a hard-failing first step hides everything behind it
+
+CI run 1 failed on nine ruff errors: an unsorted `__slots__`, an unsorted `__all__`,
+`Sequence` imported from `typing` rather than `collections.abc`, two now-redundant quoted
+annotations, and import ordering in three test files. All cosmetic, all auto-fixable.
+
+Because `Lint` failed hard and first, **Type-check, the bare-venv import check and the
+entire test suite were skipped**. Three checks that had never run once were hidden behind a
+style error, and the run reported one problem while concealing whether there were others.
+
+The dangerous part is what would have happened next. Fixing only the lint would have turned
+the run green, and "CI passes" would have been reported — while `mypy --strict` had still
+never been attempted on any platform. **A green run after a masked failure produces false
+confidence, because it looks identical to a run where everything was genuinely checked.**
+
+**Fix:** `Type-check`, the bare-venv check and `Test` now carry `if: not cancelled()`, so a
+lint failure no longer masks them. The job still fails overall; it reports everything first.
+`not cancelled()` rather than `always()`, because `always()` keeps running through a manual
+cancellation and makes a cancelled run cost as much as a full one.
+
+**General principle:** in any pipeline of independent checks, an early hard failure must not
+prevent later ones from reporting. Ordering should decide what is *reported first*, never
+what is *reported at all*.
+
+## 15c. Coverage baseline (Phase 8 target: >= 80% on non-hardware paths)
+
+Measured with the same command CI runs. The CI job-log endpoint returns HTTP 403 without
+authentication, so this is a local run of `pytest --cov=focusedgaze --cov-report=term-missing`
+rather than the run-2 log itself; the command and the test set are identical.
+
+```
+TOTAL   164 statements   22 missed   87%
+```
+
+**The headline number is not meaningful yet, in both directions.**
+
+| Module | Statements | Missed | Cover |
+|---|---|---|---|
+| `core/positioning.py` | 103 | 7 | 93% |
+| `core/filters.py` | 45 | 2 | 96% |
+| `cli.py` | 13 | 13 | 0% |
+| every other module | 0 | 0 | "100%" |
+
+- **Inflated by stubs.** Eighteen modules are empty Phase 2-7 placeholders with zero
+  statements, which coverage reports as 100%. They contribute nothing and flatter the total.
+- **Deflated by `cli.py`.** Its 13 statements are a version banner with no test, dragging
+  the total down by roughly six points.
+
+**The honest figure for code that actually exists** — `filters.py` plus `positioning.py`,
+the two modules extracted so far — is **148 statements, 9 missed, 94%**.
+
+That is comfortably above the Phase 8 target, but the target is not yet meaningfully
+tested: it will only start to bite once the stubs are filled, at which point the total will
+drop sharply before recovering. **A falling coverage percentage during Phases 2-7 is
+expected and is not a regression** — it means real code is replacing empty files faster
+than tests are being written for it. The number to watch is per-module, not the total.
+
+Uncovered lines in the two real modules are error and edge paths: the degenerate-landmark
+return, the file-load failure branch in `FocalCalibration.load`, and a few guidance-message
+branches in the positioning gate.
 
 ## 16. Additional question
 
