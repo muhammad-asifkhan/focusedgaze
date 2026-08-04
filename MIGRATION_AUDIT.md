@@ -2066,3 +2066,178 @@ how the original claim reached the README in the first place.
 
 **Rule 8 is usually applied to model URLs, checksums and platform claims. It applies to
 instructions with the same force.** An instruction is not evidence, whoever wrote it.
+
+---
+
+---
+
+# 37. Section 33.4 implemented: the fixture now pins its own input
+
+The calibration fixture read its model from a path that ordinary recalibration overwrites,
+so it began failing the first time somebody recalibrated and reported it as a numeric drift
+of exactly 1.0 with no hint of the cause. Fixed here. **The suite is back to 19 passed.**
+
+## 37.1 The approach, and why it beats the two obvious ones
+
+The fixture proves that the extracted `apply_calibration` matches the legacy one. That
+equivalence holds for **any** model, provided both sides use the same one. It never needed a
+real person's calibration.
+
+So the model is now **synthetic**: fitted from generated pairs by
+`tests/golden/make_synthetic_calibration.py` and committed as
+`tests/fixtures/tier1/synthetic_calibration.pkl` (1,190 bytes).
+
+Two alternatives were considered and are worse:
+
+- **Load the real backup by name from the legacy tree.** Keeps the dependency on an external
+  tree that has now moved three times in one session, and keeps a real person's calibration
+  in the loop for no benefit.
+- **Commit the real backup.** Fixes mutability but puts personal data in a public repository,
+  against section 9.3.
+
+The synthetic model has neither problem. It is fitted with the **unmodified legacy fitter**,
+via `robust_fit_samples`, so the pickle is structurally identical to a real profile: same
+dict keys, same scikit-learn objects, same degree. What changed is whose data it is, not
+what it is.
+
+## 37.2 This is not the re-recording that was rejected
+
+Section 33.4 rejected re-recording, and this re-records. The distinction matters.
+
+The rejected version would have re-recorded against **whatever model happened to be on
+disk**, trading a pinned baseline for an arbitrary one and turning the suite green by
+lowering the bar. This replaces a **mutable input with an immutable committed one**. The
+baseline is not weakened, it is finally nailed down: the fixture and its input now travel
+together in the same commit and cannot drift apart.
+
+## 37.3 Both properties preserved, proven rather than assumed
+
+| Property | Before | After |
+|---|---|---|
+| Polynomial degree | 3 | **3** |
+| Grid values on the `[0,1]` clamp | 154 | **120** |
+
+Degree is read from the fitted model, not asserted. The clamp count went **down**, which is
+not a regression: fewer saturated cases means more of the grid exercises the polynomial
+itself. Both rails are still hit, 60 values at 0.0 and 60 at 1.0, so neither side of the
+clamp is unpinned. The count is now recorded in the fixture as `clamped_values`, so losing
+it later is visible in a diff rather than silent.
+
+## 37.4 Mutation-checked
+
+A fixture that passes has not been shown to catch anything. Against the re-recorded fixture,
+tolerance 1e-9:
+
+| Mutation | Worst drift | Caught |
+|---|---|---|
+| (control) unmutated | 0.000e+00 | passes, as required |
+| swapped x/y coefficient sets | 1.000e+00 | yes |
+| reversed coefficient order | 8.318e-01 | yes |
+| degree 2 instead of degree 3 | 1.997e-02 | yes |
+| single coefficient +1e-6 | 7.200e-07 | yes |
+
+The last row matters most: sensitivity extends to a perturbation four orders of magnitude
+below the ones a broken refactor would produce. The degree row is the live risk from F3,
+where `fit_calibration` defaults to 2 while the robust path passes 3.
+
+## 37.5 The guard fails loudly, and that was tested too
+
+`FixtureModelMismatch` names both digests and the file, and refuses to continue.
+
+It is deliberately **not** an `ImplUnavailable`. That class is caught by the session fixture
+and converted into a skip, and a skip is how the original defect stayed invisible. Writing
+the check without that distinction would have reproduced the bug inside its own fix.
+
+That was a real trap, not a hypothetical: the first version of this change raised
+`FixtureModelMismatch` inside `_load_legacy`, whose broad `except Exception` converts
+anything into `ImplUnavailable`. It would have skipped. Caught before commit by re-reading
+the exception path rather than by the tests, which would have reported a plausible skip.
+
+Verified by tampering with the recorded digest and re-running: **1 failed, 4 errors, zero
+skips.**
+
+## 37.6 The biometric guard rail was strengthened, not relaxed
+
+`test_fixtures_contain_nothing_biometric` asserted that only `.json` lives in the Tier 1
+fixture directory, and committing a `.pkl` tripped it. The guard is doing real work, so it
+was not weakened to accommodate the new file.
+
+It now permits exactly one non-JSON file, **identified by digest rather than by name**. A
+real calibration profile dropped in under the filename `synthetic_calibration.pkl` still
+fails. That is the case worth catching, because it is the one that looks harmless in a diff.
+
+`.gitignore` keeps its blanket `*.pkl` exclusion with a single negation for this one path,
+so every other pickle stays excluded by default.
+
+## 37.7 The real backup is untouched, and its digest is recorded here
+
+`calibration_model.backup-20260803.pkl` remains where it is in the legacy tree. It was not
+committed and not deleted.
+
+```
+sha256  b430c1037aaa4a80d06c8f13447e9f599489c1a2cd3541a806a99acb65fa25a4
+```
+
+**This is the artifact that verified the original fixture**, at 0.0 drift across all 169
+cases. It is recorded so the original equivalence can be re-derived if it is ever
+questioned. The current fixture no longer depends on it.
+
+The synthetic model's own digest, recorded in `calibration_apply.json`:
+
+```
+sha256  66fdd379bc1d702c7d0fc232510ac736be21a60406844323c113c36555a18948
+```
+
+## 37.8 The archive-recovery route worked, and is worth knowing
+
+Between the previous section and this one, the legacy tree appeared to have been deleted:
+the directory was gone and a 774 MB `game_integration.zip` sat in its place. The backup file
+was **not** in that archive, because the archive predated it.
+
+The archive's plain `models/calibration_model.pkl` was extracted to a scratch directory and
+replayed through the fixture grid using the archived `calibration_utils.py`. Result: **0.0
+drift across 169 cases**, and a digest matching the loose backup exactly. The fixture model
+was recovered and independently verified from a zip before the loose file turned up again at
+a third path.
+
+Two things worth carrying forward:
+
+1. **A presumed-lost artifact is worth ten minutes of checking before it is treated as
+   lost.** The recovery needed four files out of 60,849 entries and produced a proof rather
+   than a plausible-looking candidate.
+2. **Verify a recovered artifact by replay, not by filename or timestamp.** The zip entry's
+   mtime matched the backup's, which was suggestive but not evidence. Replaying it through
+   the fixture was.
+
+## 37.9 The legacy path now has one home
+
+The path moved three times in one session, ending at a location on `C:` with an underscore.
+Every document that repeated the literal value went stale each time.
+
+`CONTEXT_HANDOFF.md` section 2 is now the **only** place in the repository holding the
+literal value. Every other reference, in documents and in code, goes through
+`FOCUSEDGAZE_LEGACY_DIR`. The harness already worked this way, which is why nothing in
+`src/` or `tests/` needed changing: only the prose was stale. Section 7's command now says
+to take the value from section 2 rather than repeating it, because repeating it is exactly
+how the previous three staleness incidents happened.
+
+## 37.10 A demonstration that confirmed what it was built to confirm
+
+Recorded under rule 9 because it is the same principle as the mutation check, in a place it
+was not expected.
+
+`examples/filter_demo.py` was written to show that the shipped filter settings beat
+over-smoothing, with an over-smoothed configuration included as the losing comparison. The
+closing text asserted that over-smoothing wins on jitter and loses on lag, which is the
+textbook tradeoff and is what the example was built to illustrate.
+
+Running it disproved that. The over-smoothed filter's jitter was **worse**, 0.00414 against
+the tuned 0.00214, because it never reaches the target at all: what registered as jitter was
+the filter still creeping toward a position it had left 25 frames earlier. The honest
+conclusion is more interesting than the intended one. Smoothing harder stops buying
+steadiness once the filter can no longer keep up.
+
+**A demonstration that confirms what you expected has not been tested against anything.** It
+is the same failure mode as a fixture that passes without having been shown to catch a bug:
+agreement with a prior belief is not evidence, whether the belief is about code or about a
+tradeoff. The example now states what its own numbers show.

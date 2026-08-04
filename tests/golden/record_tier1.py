@@ -26,6 +26,7 @@ Usage (from the repo root, with the gaze venv):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -48,7 +49,7 @@ def _legacy_missing_message() -> str:
         f"Legacy pipeline not found at: {LEGACY}\n"
         "\n"
         "Set FOCUSEDGAZE_LEGACY_DIR to the original gaze-detection/ folder, e.g.\n"
-        "    set FOCUSEDGAZE_LEGACY_DIR=D:\\path\\to\\gaze-detection      (Windows)\n"
+        "    set FOCUSEDGAZE_LEGACY_DIR=<drive>:\\path\\to\\gaze-detection (Windows)\n"
         "    export FOCUSEDGAZE_LEGACY_DIR=/path/to/gaze-detection      (POSIX)\n"
         "\n"
         "Or check the two projects out side by side:\n"
@@ -66,8 +67,13 @@ class FakeLandmark:
         self.x, self.y, self.z = x, y, z
 
 
-def record_calibration_apply(cal_utils, model) -> dict:
-    """Sweep a deterministic (pitch, yaw) grid through apply_calibration()."""
+def record_calibration_apply(cal_utils, model, model_sha256: str) -> dict:
+    """Sweep a deterministic (pitch, yaw) grid through apply_calibration().
+
+    `model_sha256` identifies the exact model these expected values came from.
+    The fixture pins its own input by content rather than trusting whatever
+    happens to sit at a path, which is the fix for audit section 33.
+    """
     cases = []
     # Radians. The real signal sits roughly within +/-0.6 rad; the grid spans a
     # little wider so clamping at the [0,1] edges is covered too.
@@ -77,8 +83,13 @@ def record_calibration_apply(cal_utils, model) -> dict:
             x, y = cal_utils.apply_calibration(model, pitch, yaw)
             cases.append({"pitch": pitch, "yaw": yaw,
                           "x": float(x), "y": float(y)})
+    clamped = sum(1 for c in cases for v in (c["x"], c["y"]) if v in (0.0, 1.0))
     return {"description": "apply_calibration over a fixed (pitch,yaw) grid",
-            "degree": model.get("degree"), "n": len(cases), "cases": cases}
+            "model_file": "synthetic_calibration.pkl",
+            "model_sha256": model_sha256,
+            "degree": model.get("degree"),
+            "clamped_values": clamped,
+            "n": len(cases), "cases": cases}
 
 
 def record_one_euro(OneEuro) -> dict:
@@ -201,12 +212,24 @@ def main() -> int:
         import calibration_utils
         import positioning_gate
 
-        cal_path = LEGACY / "models" / "calibration_model.pkl"
+        # The calibration model is the COMMITTED SYNTHETIC one, not the live
+        # profile in the legacy tree. This fixture proves that the extracted
+        # apply_calibration matches the legacy one, which holds for any model so
+        # long as both sides use the same one, so it does not need a real
+        # person's calibration.
+        #
+        # It used to read models/calibration_model.pkl, which ordinary
+        # recalibration overwrites. That made a mutable file owned by another
+        # activity into a fixture input, and it silently invalidated the fixture
+        # the first time somebody recalibrated (audit section 33).
+        cal_path = OUT / "synthetic_calibration.pkl"
         if not cal_path.exists():
-            print(f"ERROR: no calibration model at {cal_path}")
-            print("       Run milestone4_calibration.py first.")
+            print(f"ERROR: no synthetic calibration model at {cal_path}")
+            print("       Generate it with:")
+            print("         python tests/golden/make_synthetic_calibration.py")
             return 1
         model = calibration_utils.load_calibration(str(cal_path))
+        cal_digest = hashlib.sha256(cal_path.read_bytes()).hexdigest()
 
         # OneEuro lives inside gaze_server. Importing it is heavy (it builds the
         # ONNX session via gaze_pipeline) but it is the real implementation, and
@@ -216,7 +239,8 @@ def main() -> int:
         OUT.mkdir(parents=True, exist_ok=True)
         written = []
         for name, data in (
-            ("calibration_apply.json", record_calibration_apply(calibration_utils, model)),
+            ("calibration_apply.json",
+             record_calibration_apply(calibration_utils, model, cal_digest)),
             ("one_euro.json", record_one_euro(gaze_server.OneEuro)),
             ("positioning_gate.json", record_positioning(positioning_gate, use_focal=True)),
             ("positioning_gate_nofocal.json",

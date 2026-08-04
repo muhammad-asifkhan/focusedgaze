@@ -14,6 +14,7 @@ a wider tolerance, that is a DEVIATION, not a quiet edit to this number.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 
@@ -131,10 +132,31 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
 
 
 def test_fixtures_contain_nothing_biometric() -> None:
-    """Guard rail: Tier 1 must stay numeric so it is safe to commit.
+    """Guard rail: Tier 1 must stay safe to commit.
 
-    A future contributor adding a frame dump here would leak a face into git.
+    A future contributor adding a frame dump here would leak a face into git, and
+    a calibration profile is personal data too (audit section 9.3).
+
+    Exactly one non-JSON file is permitted: the synthetic calibration model. It is
+    allowed by DIGEST, not by name, so dropping a real profile in under that
+    filename still fails. That is the case worth catching, because it is the one
+    that looks harmless in a diff.
     """
+    allowed_pkl = "synthetic_calibration.pkl"
+    expected_digest = _load("calibration_apply.json").get("model_sha256")
+
     for path in FIXTURES.glob("*"):
+        if path.name == allowed_pkl:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            assert actual == expected_digest, (
+                f"{path.name} is not the synthetic model the fixture was recorded from.\n"
+                f"  expected {expected_digest}\n"
+                f"  actual   {actual}\n"
+                "Only the generated synthetic model may be committed here. If this is a "
+                "real calibration profile, it is personal data and must not be committed."
+            )
+            assert path.stat().st_size < 64_000, "synthetic model is implausibly large"
+            continue
+
         assert path.suffix == ".json", f"unexpected fixture type committed: {path.name}"
         assert path.stat().st_size < 512_000, f"{path.name} is too large to be pure numbers"

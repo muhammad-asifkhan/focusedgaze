@@ -13,11 +13,11 @@ Two separate things, in two separate places:
 
 | | Path | What it is | Git |
 |---|---|---|---|
-| **The game** | `D:\Projects\game_integration` | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | the originating game repository |
+| **The game** | see section 2 | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | the originating game repository |
 | **The SDK** | `C:\projects\focusedgaze` | The gaze pipeline extracted from that game into a pip-installable Python package. **This is the active work.** | `github.com/muhammad-asifkhan/focusedgaze` |
 
-The SDK is being extracted **from** `D:\Projects\game_integration\gaze-detection\` (the
-"legacy pipeline"), which stays working throughout. Phase 11 will make the game depend on the
+The SDK is being extracted **from** the legacy pipeline in the originating game
+repository, which stays working throughout. Phase 11 will make the game depend on the
 published package.
 
 **Attribution:** the SDK is attributed entirely to **Muhammad Asif Khan
@@ -28,13 +28,17 @@ No second identity anywhere. This was enforced by a history rewrite.
 
 ## 2. Where everything lives
 
-The legacy pipeline **moved off `C:` and is no longer where earlier revisions of this file
-said it was.** Paths below are current as of 2026-08-04 and verified. Treat them as this
-machine's layout, not as a guarantee: `FOCUSEDGAZE_LEGACY_DIR` is the mechanism that makes
-the harness independent of them (section 7).
+**This table is the single source of truth for the legacy path.** It is the only place in
+the repository that records the literal value. Everywhere else, in documents and in code,
+refers to `FOCUSEDGAZE_LEGACY_DIR`.
+
+That rule exists because the path moved **three times in one session**, and every document
+that repeated the literal value went stale on the next move. Verified as of 2026-08-04, but
+treat it as this machine's layout rather than a guarantee: if it moves again, change it here
+and nothing else needs touching.
 
 ```
-D:\Projects\game_integration\         the game repo (separate project)
+C:\game_integration\                  the game repo (separate project)
   gaze-detection\                     THE LEGACY PIPELINE — the reference implementation
     gaze_env\                         its virtualenv — FROZEN, see section 6
     gaze_pipeline.py                  landmarks + ONNX inference
@@ -137,7 +141,7 @@ assertions stay frozen while the code beneath them is replaced.
 
 | Env | Path | Rule |
 |---|---|---|
-| **Legacy** | `D:\Projects\game_integration\gaze-detection\gaze_env` | **FROZEN. Never install anything into it again.** |
+| **Legacy** | `$FOCUSEDGAZE_LEGACY_DIR\gaze_env` (see section 2) | **FROZEN. Never install anything into it again.** |
 | **SDK** | `C:\projects\focusedgaze\.venv` | Normal dev env. `-e ".[cpu,calibration,dev]"` plus `websockets` |
 
 The Tier 1 fixtures were recorded using the legacy venv's exact dependency set. A
@@ -165,25 +169,27 @@ diff confirmed nothing else moved when it was added.
 ## 7. Running things
 
 ```bash
-# Tests. Currently 1 FAILED, 18 passed, 2 deselected — the failure is real and
-# is a harness defect, not a refactor bug. See section 9 item 2 / audit §33.
+# Tests. Currently 19 passed, 2 deselected.
 cd C:\projects\focusedgaze
-set FOCUSEDGAZE_LEGACY_DIR=D:\Projects\game_integration\gaze-detection
+set FOCUSEDGAZE_LEGACY_DIR=<the gaze-detection path from section 2>
 pytest -q -rs
 
 # Hardware tests (needs the Tier 2 fixture — does not exist yet)
 pytest -m hardware
 
 # The game
-cd D:\Projects\game_integration\gaze-detection && gaze_env\Scripts\python.exe gaze_server.py
-cd D:\Projects\game_integration\game\workingGameTemplate && python -m http.server 8000
+cd %FOCUSEDGAZE_LEGACY_DIR% && gaze_env\Scripts\python.exe gaze_server.py
+cd %FOCUSEDGAZE_LEGACY_DIR%\..\game\workingGameTemplate && python -m http.server 8000
 # then http://localhost:8000/forest.html
 ```
 
 `FOCUSEDGAZE_LEGACY_DIR` points the harness at the legacy pipeline and is the reason the
 suite does not care where that pipeline lives. Set it. The fallback is `../gaze-detection`
-relative to the repository root, which does not resolve in the current layout: the SDK is
-on `C:` and the legacy pipeline is on `D:`.
+relative to the repository root, which does not resolve in the current layout.
+
+**The literal value lives in exactly one place: the table in section 2.** It has moved
+three times in one session, and every document that repeated it went stale on the next
+move. Everywhere else, including this section, refers to the variable.
 
 **Always run with `-rs`.** A skip in this suite has already hidden a failing assertion
 once; a bare `pytest -q` reports the skip count without the reason.

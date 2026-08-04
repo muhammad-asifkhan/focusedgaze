@@ -151,7 +151,7 @@ and a webcam held by a crashed process is an annoying thing to debug.
 The suite compares focusedgaze against the original implementation where both exist.
 
 ```bash
-set FOCUSEDGAZE_LEGACY_DIR=D:\Projects\game_integration\gaze-detection
+set FOCUSEDGAZE_LEGACY_DIR=<path to your gaze-detection checkout>
 pytest -q -rs
 ```
 
@@ -163,6 +163,7 @@ cannot reach the reference implementation, but it means a clean run is not proof
 already concealed a failing assertion for an unknown period, and a bare run reports the
 count without the cause.
 
-One test currently fails, and it is a known harness defect rather than a regression: the
-calibration fixture loads its input model from a path that a recalibration overwrites. It is
-recorded in the audit as section 33.
+The calibration fixture carries its own committed model and verifies it by SHA-256, so a
+recalibration elsewhere on the machine cannot invalidate it. If that digest ever fails to
+match, the error names both digests and refuses to continue rather than reporting a
+meaningless numeric drift.

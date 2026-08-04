@@ -16,6 +16,8 @@ Selection order:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import sys
@@ -30,8 +32,59 @@ LEGACY_DIR = pathlib.Path(
 )
 
 
+_FIXTURES = _REPO_ROOT / "tests" / "fixtures" / "tier1"
+
+
 class ImplUnavailable(RuntimeError):
     """Raised when neither implementation can be loaded; tests skip on this."""
+
+
+class FixtureModelMismatch(RuntimeError):
+    """The committed calibration model is not the one the fixture was recorded from.
+
+    Deliberately NOT an ImplUnavailable. A skip would hide this, and hiding it is
+    exactly how the previous version of this problem survived undetected.
+    """
+
+
+def _calibration_model_path() -> pathlib.Path:
+    """The committed synthetic model, verified by digest against the fixture.
+
+    Audit section 33: this fixture used to load the live profile from the legacy
+    tree, which ordinary recalibration overwrites. The expected values were
+    pinned while one of the inputs was free to change underneath them, so the
+    fixture began failing the first time somebody recalibrated, and reported it
+    as a numeric drift of exactly 1.0 with no indication of the real cause.
+
+    The model is now committed next to the fixture and identified by content.
+    """
+    model_path = _FIXTURES / "synthetic_calibration.pkl"
+    fixture_path = _FIXTURES / "calibration_apply.json"
+
+    if not model_path.exists():
+        raise ImplUnavailable(
+            f"missing {model_path.name}; regenerate with "
+            "python tests/golden/make_synthetic_calibration.py"
+        )
+    if not fixture_path.exists():
+        raise ImplUnavailable(f"missing {fixture_path.name}")
+
+    expected = json.loads(fixture_path.read_text(encoding="utf-8")).get("model_sha256")
+    actual = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    if expected and actual != expected:
+        raise FixtureModelMismatch(
+            "calibration fixture and its model disagree.\n"
+            f"  file     : {model_path}\n"
+            f"  expected : {expected}   (recorded in calibration_apply.json)\n"
+            f"  actual   : {actual}\n"
+            "The fixture's expected values were recorded from a different model, so any\n"
+            "comparison against it is meaningless. Do NOT re-record to make this pass:\n"
+            "that trades a pinned baseline for whatever is on disk. Restore the model, or\n"
+            "regenerate BOTH together:\n"
+            "  python tests/golden/make_synthetic_calibration.py\n"
+            "  python tests/golden/record_tier1.py"
+        )
+    return model_path
 
 
 def _load_legacy() -> dict[str, Any]:
@@ -51,10 +104,7 @@ def _load_legacy() -> dict[str, Any]:
         import calibration_utils
         import positioning_gate
 
-        cal_path = LEGACY_DIR / "models" / "calibration_model.pkl"
-        if not cal_path.exists():
-            raise ImplUnavailable(f"no calibration model at {cal_path}")
-        model = calibration_utils.load_calibration(str(cal_path))
+        model = calibration_utils.load_calibration(str(_calibration_model_path()))
 
         import gaze_pipeline
         import gaze_server  # heavy: builds the ONNX session
@@ -85,7 +135,10 @@ def _load_legacy() -> dict[str, Any]:
             "pipeline": gaze_pipeline,          # Tier 2: frames -> (pitch, yaw)
             "make_landmarker": make_landmarker,
         }
-    except ImplUnavailable:
+    except (ImplUnavailable, FixtureModelMismatch):
+        # FixtureModelMismatch must NOT be swallowed into ImplUnavailable below.
+        # That would turn a fixture disagreeing with its own input into a skip,
+        # which is precisely how the section 33 defect stayed invisible.
         raise
     except Exception as exc:
         raise ImplUnavailable(f"legacy import failed: {exc!r}") from exc

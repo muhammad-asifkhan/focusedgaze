@@ -27,6 +27,13 @@ gaze_env/
 # Calibration profiles are personal data: derived from one person's eyes.
 *.pkl
 
+# One deliberate exception. This model is SYNTHETIC, fitted from generated pairs
+# by tests/golden/make_synthetic_calibration.py, and contains nobody's data. It
+# is committed because the calibration fixture has to pin its own input: reading
+# a live profile from the legacy tree made a file that ordinary recalibration
+# overwrites into a fixture input (audit section 33).
+!tests/fixtures/tier1/synthetic_calibration.pkl
+
 # Tier 2 golden fixtures: recorded webcam frames contain a real face. Only the
 # numeric Tier 1 fixtures (tests/fixtures/tier1/*.json) are committed, and
 # test_golden_tier1.py asserts that stays true.
