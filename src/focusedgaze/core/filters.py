@@ -31,7 +31,7 @@ class OneEuroFilter:
     stream on one thread.
     """
 
-    __slots__ = ("min_cutoff", "beta", "d_cutoff", "_x_prev", "_dx_prev", "_t_prev", "_freq")
+    __slots__ = ("_dx_prev", "_freq", "_t_prev", "_x_prev", "beta", "d_cutoff", "min_cutoff")
 
     def __init__(self, min_cutoff: float = 0.7, beta: float = 0.6,
                  d_cutoff: float = 1.0) -> None:

@@ -75,11 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(LEGACY))
     try:
         import cv2
+        import gaze_pipeline
         import numpy as np
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python import vision as mp_vision
-
-        import gaze_pipeline
 
         landmarker = mp_vision.FaceLandmarker.create_from_options(
             mp_vision.FaceLandmarkerOptions(

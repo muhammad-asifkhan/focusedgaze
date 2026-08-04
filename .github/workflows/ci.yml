@@ -41,10 +41,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[cpu,calibration,dev]"
 
+      # Every check below Lint runs even when an earlier one has failed.
+      #
+      # Without this, the first hard failure masks everything after it. On the
+      # first CI run a single unsorted `__slots__` failed Lint, which skipped
+      # Type-check, the bare-venv import guarantee and the whole test suite —
+      # three checks that had never run stayed unverified because of a cosmetic
+      # style error, and the run reported one problem while hiding whether there
+      # were others.
+      #
+      # `!cancelled()` rather than `always()`: always() also keeps running after
+      # a manual cancellation, so a cancelled run costs as much as a full one.
+      # This reports everything on failure while still honouring a cancel.
+      #
+      # The job still fails overall. It just tells you all of what is wrong.
       - name: Lint
         run: ruff check src tests
 
       - name: Type-check
+        if: ${{ !cancelled() }}
         run: mypy
 
       # The base install must work with no ONNX provider, no websockets and no
@@ -52,10 +67,12 @@ jobs:
       # ImportError (D8). Checked in a throwaway environment so the dev extras
       # above cannot mask a missing runtime dependency.
       - name: Core imports with optional dependencies absent
+        if: ${{ !cancelled() }}
         run: |
           python -m venv /tmp/bare
           /tmp/bare/bin/pip install --quiet -e .
           /tmp/bare/bin/python -c "import focusedgaze; print('bare import OK', focusedgaze.__version__)"
 
       - name: Test
+        if: ${{ !cancelled() }}
         run: pytest -q --cov=focusedgaze --cov-report=term-missing

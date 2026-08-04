@@ -31,18 +31,19 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol
 
 __all__ = [
+    "LEFT_IRIS_CENTER",
+    "NOSE_TIP",
+    "RIGHT_IRIS_CENTER",
     "FocalCalibration",
     "PositioningConfig",
-    "PositioningStatus",
     "PositioningGate",
-    "LEFT_IRIS_CENTER",
-    "RIGHT_IRIS_CENTER",
-    "NOSE_TIP",
+    "PositioningStatus",
 ]
 
 # MediaPipe FaceLandmarker indices. Iris points require the refined-landmarks
@@ -97,11 +98,11 @@ class FocalCalibration:
         return {"focal_px": self.focal_px, "frame_w": self.frame_width}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FocalCalibration":
+    def from_dict(cls, data: dict[str, Any]) -> FocalCalibration:
         return cls(float(data["focal_px"]), int(data["frame_w"]))
 
     @classmethod
-    def load(cls, path: str | Path) -> "FocalCalibration":
+    def load(cls, path: str | Path) -> FocalCalibration:
         """Load from a JSON file. The path is explicit — there is no default.
 
         Raises:

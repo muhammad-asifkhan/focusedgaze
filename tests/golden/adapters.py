@@ -57,7 +57,7 @@ def _load_legacy() -> dict[str, Any]:
         model = calibration_utils.load_calibration(str(cal_path))
 
         import gaze_pipeline
-        import gaze_server            # heavy: builds the ONNX session
+        import gaze_server  # heavy: builds the ONNX session
 
         def make_landmarker():
             """A FaceLandmarker configured exactly as the live system does."""
@@ -87,7 +87,7 @@ def _load_legacy() -> dict[str, Any]:
         }
     except ImplUnavailable:
         raise
-    except Exception as exc:                      # noqa: BLE001 - surfaced as a skip
+    except Exception as exc:
         raise ImplUnavailable(f"legacy import failed: {exc!r}") from exc
     finally:
         os.chdir(prev)
@@ -96,7 +96,7 @@ def _load_legacy() -> dict[str, Any]:
 def _load_sdk() -> dict[str, Any]:
     """Import the new package. Not available until Phase 2."""
     try:
-        from focusedgaze.core import filters, positioning       # noqa: F401
+        from focusedgaze.core import filters, positioning  # noqa: F401
     except ImportError as exc:
         raise ImplUnavailable(f"focusedgaze core not implemented yet: {exc}") from exc
     raise ImplUnavailable("focusedgaze core is a Phase 2 stub")
