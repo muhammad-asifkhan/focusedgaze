@@ -208,13 +208,25 @@ Extraction must not change behaviour. Recording these now so drift is detectable
 |---|---|---|
 | Capture | 1280×720, MSMF, ~31 fps | `gaze_server.py` |
 | ONNX input | 448×448, ImageNet mean/std | `gaze_pipeline.py` |
-| `BINS` | 90; angle = `argmax·4 − 180` degrees | `gaze_pipeline.py` |
+| `BINS` | 90; angle = `Σ(softmax(bins)·i)·4 − 180` degrees — an expectation, **not** an argmax | `gaze_pipeline.py` |
 | `BBOX_SMOOTHING` | 0.3 | `gaze_pipeline.py` |
 | Face crop padding | 0.3 | `gaze_pipeline.py` |
 | 1€ filter | `MIN_CUTOFF 0.7`, `BETA 0.6`, `D_CUTOFF 1.0` | `gaze_server.py` |
 | Broadcast | 60 Hz nominal (measured ~35-44 Hz; Windows timer granularity) | `gaze_server.py` |
 | Calibration | degree 3 via `robust_fit_samples`, MAD factor 2.5, `min_keep` 60 | `calibration_utils.py` |
 | Positioning gate | 45–65 cm, `CENTER_TOL` 0.12, `REAL_IPD_CM` 6.3, `ASSUMED_HFOV_DEG` 60 | `positioning_gate.py` |
+
+**Correction (section 32.6b).** The `BINS` row previously described the angle as
+`argmax·4 − 180`. That was wrong, and it was wrong in the one table Phase 2's `model.py`
+is meant to be written from. The code computes a **softmax-weighted expectation over the
+90 bins** (`gaze_pipeline.py` L61-64) — it softmaxes the logits, dots them with the bin
+indices, then scales and offsets. An argmax implementation would agree with it only when
+the distribution is sharply unimodal, and would otherwise return a plausible, smooth,
+wrong answer while diverging discontinuously near a bin boundary. Section 32.2 measured
+the practical consequence of the distinction: because the decode is an expectation, it is
+smooth, which is why it survives an execution-provider change with 188x of tolerance to
+spare. Row corrected in place; recorded here rather than silently edited, because the
+error was live long enough to be built on.
 
 **The yaw/pitch defect**: `gaze_pipeline.py` L59-60 unpacks `yaw_bins, pitch_bins` even
 though the ONNX graph *names* tensor[0] `pitch_bins`. `export_to_onnx.py` L~26 confirms
@@ -1200,16 +1212,13 @@ clone; the real repository was never touched by either.
 
 ### Failure A — the line-wrap bug, hit a second time
 
-The rule was `Arsalan Durrani`, a two-word literal with a single space. In historical blobs
-the name wrapped across lines:
-
-```
-    ... is now addressed to Asif, not to
-    Arsalan.
-
-    ... NOTICE and the README credit Arsalan
-    Durrani as contributor.
-```
+The rule was the superseded contributor's full personal name: a two-word literal joined by
+a single space. In historical blobs that name wrapped across lines in two places — once
+with the given name ending a line and the sentence continuing on the next, and once with
+the given name ending a line and the family name beginning the following one, with the
+paragraph's indentation sitting between them. In both cases the two words were separated
+in the file by a newline plus indentation rather than by the single space the rule
+required.
 
 The rule matched neither. **This is precisely the failure documented in section 22 and in
 the brief's A1** — the rule that exists to prevent it was written, read, and then walked
@@ -1220,17 +1229,22 @@ never a clause". A two-word *name* felt like it satisfied that. It does not. The
 not "is this short" but **"can this string be split by a line break?"** Any multi-word
 literal can.
 
-**Fix.** Single-word rules alongside the two-word one, ordered so the full name is consumed
-first:
-
-```
-Arsalan Durrani==>Muhammad Asif Khan
-Arsalan==>Muhammad Asif Khan
-Durrani==>Khan
-```
+**Fix.** Three rules instead of one, ordered longest-first so the full name is consumed
+before either half can be: the two-word full name mapping to the canonical author's full
+name, then the given name alone mapping to the canonical full name, then the family name
+alone mapping to the canonical family name. Longest-first ordering matters — with the
+single-word rules ahead of the two-word one, the first rule would consume half the name
+and leave the second rule with nothing to match.
 
 A wrapped occurrence now yields clumsy text in historical blobs, which the standing
 decision accepts: history is scrubbed, not readable prose.
+
+**Note on how this section is written (standing rule 10).** The rules and the wrapped
+source text above are *described* rather than reproduced. An earlier revision quoted both
+verbatim, which reintroduced into the tip exactly the strings the pass existed to remove —
+the same self-defeating-documentation pattern as Failure B below, and the fifth instance
+of it in this project. Any future write-up of a replacement pass describes the shape of
+its rules and never prints them.
 
 ### Failure B — the documentation defeated its own corruption canary
 
@@ -1676,3 +1690,125 @@ scipy are all unchanged, so the section 31 baseline discipline holds and the sec
 divergence table is still accurate.
 
 The legacy venv was not touched.
+
+---
+
+---
+
+# 34. Publisher confirmation, and the corrections batch before the first tag
+
+## 34.1 Trusted Publishing — CONFIRMED, open item closed
+
+Confirmed by the project owner on 2026-08-04:
+
+| Check | Result |
+|---|---|
+| PyPI pending publisher | registered |
+| TestPyPI pending publisher | registered (separate registration) |
+| GitHub environment `pypi` | exists |
+| GitHub environment `testpypi` | exists |
+| Values verified against `release.yml` | yes |
+
+**The pending-publisher reading of the two 404s was correct.** Section 27 recorded that
+neither project existed on PyPI or TestPyPI and noted this was *consistent with* a pending
+publisher, which is not publicly visible — but that the alternative, nothing registered at
+all, produces an identical observation and surfaces only as a 403 at upload. That ambiguity
+is now resolved in favour of the first reading. Neither project exists, so **the first
+upload creates it**, which is exactly what a pending publisher is for.
+
+**`release.yml` needs no change.** Its inline setup instructions already document the
+pending-publisher path (use the account-level publishing page when the project does not yet
+exist, the project settings page when it does), and they name the four bound values that
+must match. Nothing in the confirmed configuration contradicts them.
+
+`CONTEXT_HANDOFF.md` section 9 item 2 is closed and moved to that section's Closed list.
+Section 27's open item is superseded by this section rather than edited, so the reasoning
+that resolved it stays legible.
+
+## 34.2 The decode correction in section 7
+
+Section 7's `BINS` row described the angle as an argmax scaled and offset. The code
+computes a softmax-weighted expectation over the 90 bins. Corrected in place, with the
+correction stated in section 7 itself rather than applied silently, because that table is
+the frozen record Phase 2's `model.py` is to be written from and the wrong description was
+live long enough to have been built on.
+
+The distinction is not cosmetic. An argmax agrees with an expectation only when the bin
+distribution is sharply unimodal, and diverges discontinuously near a bin boundary — a
+4-degree jump on a near-tie. It is also the reason section 32.2's cross-provider
+measurement came out as well as it did: an expectation is smooth, so float32 differences in
+the logits move the output by fractions of a bin instead of jumping one whole bin.
+
+## 34.3 Standing rule 10, applied to section 29
+
+Section 29 reproduced verbatim both the wrapped source text that defeated a replacement
+rule and the three replacement rules themselves, superseded personal name included on both
+sides of the arrow. Rewritten to describe the shape of each — a two-word name split by a
+newline and indentation, and a longest-first rule ordering — without printing either.
+
+This was the fifth instance in this project of documentation reintroducing what it
+describes, and the second to survive at the tip after the rule against it was written. A
+note now sits inside section 29 stating the constraint, so the next person to write up a
+replacement pass meets the rule at the point of temptation rather than in a list of
+standing rules elsewhere.
+
+Verified after the edit: the whole working tree matches zero of the superseded identity
+patterns.
+
+## 34.4 The path pass
+
+`CONTEXT_HANDOFF.md` sections 1, 2, 6 and 7 pointed at a legacy-pipeline location that does
+not exist. The pipeline, its frozen venv, the ONNX model and the landmarker asset are all
+intact on a different drive. Every documented command referencing the old path failed as
+written, including the Tier 2 recorder invocation that is currently the Phase 2 blocker —
+so the one instruction most needed by the next session was the one most certainly broken.
+
+All four sections corrected in a single pass rather than piecemeal, because a partial fix
+leaves the document contradicting itself, which is harder to diagnose than a uniformly
+stale one. Section 2 now says plainly that the location moved and that
+`FOCUSEDGAZE_LEGACY_DIR` is what makes the harness independent of it.
+
+Two stale claims in the same sections were corrected at the same time: the suite is not
+"19 passed" (section 33), and the SDK venv is no longer without `websockets`.
+
+Section 7 now also instructs running the suite with `-rs`. A bare run reports a skip count
+without a reason, and in this project a skip has already concealed a failing assertion.
+
+## 34.5 The mediapipe range
+
+`pyproject.toml` now declares `mediapipe>=0.10.30,<1.1`, replacing a range whose floor no
+user could resolve (section 32.5).
+
+- **Floor 0.10.30** — the lowest release with an installable distribution under
+  `requires-python = ">=3.12"`. The previous floor described versions that do not exist for
+  any supported interpreter.
+- **Ceiling `<1.1`** — 1.0.0 is upstream's 0.10.36 renumbered, by its own release note, and
+  is the only 1.x this project has run. `<2` claimed a whole major series that has never
+  been executed here.
+
+The rationale is written into `pyproject.toml` as a comment, not left only in this audit,
+because the next person to widen the bound will be reading the dependency list rather than
+section 32. **Widening means replaying the golden fixtures against each candidate version
+and recording the result — not relaxing the bound and hoping.**
+
+## 34.6 `requirements-dev.txt` now exists
+
+Section 32.6c recorded that `pyproject.toml` referred to a dev pin file that had never been
+created, and that its absence is the mechanism by which the two environments drifted onto
+different mediapipe majors unnoticed. The file now exists, pinning the SDK venv's actual
+resolved versions.
+
+It is deliberately **not** installed by CI. CI resolves the declared ranges freshly, so an
+incompatible new release surfaces as a red build instead of being masked by a pin — which
+is the entire reason section 32's divergence was findable at all. The file is for
+reproducing a specific result: recording a fixture, chasing a numeric difference, bisecting.
+
+It documents the legacy venv's two differing versions and how to match them exactly, so the
+choice between "approximate the reference" and "reproduce the reference" is explicit rather
+than accidental.
+
+**One pin in the first draft was wrong.** `platformdirs` was written from memory as 4.5.0;
+the venv has 4.11.0. Caught by diffing every declared pin against `pip freeze` before
+committing, which is the only reason it is a footnote rather than a defect. Rule 8 exists
+for exactly this: a version number not read from the environment is invented, however
+plausible it looks.

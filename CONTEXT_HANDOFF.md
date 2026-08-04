@@ -13,11 +13,11 @@ Two separate things, in two separate places:
 
 | | Path | What it is | Git |
 |---|---|---|---|
-| **The game** | `C:\game integration` | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | the originating game repository |
+| **The game** | `D:\Projects\game_integration` | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | the originating game repository |
 | **The SDK** | `C:\projects\focusedgaze` | The gaze pipeline extracted from that game into a pip-installable Python package. **This is the active work.** | `github.com/muhammad-asifkhan/focusedgaze` |
 
-The SDK is being extracted **from** `C:\game integration\gaze-detection\` (the "legacy
-pipeline"), which stays working throughout. Phase 11 will make the game depend on the
+The SDK is being extracted **from** `D:\Projects\game_integration\gaze-detection\` (the
+"legacy pipeline"), which stays working throughout. Phase 11 will make the game depend on the
 published package.
 
 **Attribution:** the SDK is attributed entirely to **Muhammad Asif Khan
@@ -28,8 +28,13 @@ No second identity anywhere — this was enforced by a history rewrite.
 
 ## 2. Where everything lives
 
+The legacy pipeline **moved off `C:` and is no longer where earlier revisions of this file
+said it was.** Paths below are current as of 2026-08-04 and verified. Treat them as this
+machine's layout, not as a guarantee: `FOCUSEDGAZE_LEGACY_DIR` is the mechanism that makes
+the harness independent of them (section 7).
+
 ```
-C:\game integration\                  the game repo (separate project)
+D:\Projects\game_integration\         the game repo (separate project)
   gaze-detection\                     THE LEGACY PIPELINE — the reference implementation
     gaze_env\                         its virtualenv — FROZEN, see section 6
     gaze_pipeline.py                  landmarks + ONNX inference
@@ -132,8 +137,8 @@ assertions stay frozen while the code beneath them is replaced.
 
 | Env | Path | Rule |
 |---|---|---|
-| **Legacy** | `C:\game integration\gaze-detection\gaze_env` | **FROZEN. Never install anything into it again.** |
-| **SDK** | `C:\projects\focusedgaze\.venv` | Normal dev env. Installed `-e ".[cpu,calibration,dev]"` to match CI |
+| **Legacy** | `D:\Projects\game_integration\gaze-detection\gaze_env` | **FROZEN. Never install anything into it again.** |
+| **SDK** | `C:\projects\focusedgaze\.venv` | Normal dev env. `-e ".[cpu,calibration,dev]"` plus `websockets` |
 
 The Tier 1 fixtures were recorded using the legacy venv's exact dependency set. A
 transitive `numpy`/`protobuf`/`mediapipe` bump there would move the baseline and surface
@@ -143,32 +148,45 @@ environment is part of the measurement.**
 Audited: 35 packages were added to `gaze_env` before this rule existed, but **nothing was
 upgraded or downgraded** — fixtures remain valid. See audit §31.
 
-**Note:** the SDK venv has no `websockets` (no `server` extra), and the legacy
-`gaze_server` imports it. Legacy-comparison tests will **skip** from the SDK venv rather
-than fail. Add the `server` extra to run the full comparison locally.
+**The two venvs do not run the same libraries.** `mediapipe` is 0.10.35 in legacy and
+1.0.0 in the SDK venv; the ONNX provider is DirectML/GPU in legacy and CPU in the SDK
+venv. Everything else — numpy, protobuf, opencv, sklearn, scipy — is identical. The ONNX
+difference was measured and is harmless (188x under tolerance); the MediaPipe landmark
+difference is **still unmeasured** because it needs a face. See audit §32 before trusting
+any cross-venv comparison.
+
+**`websockets` is now installed** in the SDK venv (audit §33.5), because the legacy
+`gaze_server` imports it and without it the legacy-comparison tests **skip**. That skip
+was concealing a genuine failure — see section 9 item 2 and audit §33. A `pip freeze`
+diff confirmed nothing else moved when it was added.
 
 ---
 
 ## 7. Running things
 
 ```bash
-# Tests (19 expected, from the legacy venv which has everything)
+# Tests. Currently 1 FAILED, 18 passed, 2 deselected — the failure is real and
+# is a harness defect, not a refactor bug. See section 9 item 2 / audit §33.
 cd C:\projects\focusedgaze
-set FOCUSEDGAZE_LEGACY_DIR=C:\game integration\gaze-detection
-pytest -q                       # -> 19 passed, 2 deselected
+set FOCUSEDGAZE_LEGACY_DIR=D:\Projects\game_integration\gaze-detection
+pytest -q -rs
 
-# Hardware tests (needs the Tier 2 fixture)
+# Hardware tests (needs the Tier 2 fixture — does not exist yet)
 pytest -m hardware
 
 # The game
-cd C:\game integration\gaze-detection && gaze_env\Scripts\python.exe gaze_server.py
-cd C:\game integration\game\workingGameTemplate && python -m http.server 8000
+cd D:\Projects\game_integration\gaze-detection && gaze_env\Scripts\python.exe gaze_server.py
+cd D:\Projects\game_integration\game\workingGameTemplate && python -m http.server 8000
 # then http://localhost:8000/forest.html
 ```
 
-`FOCUSEDGAZE_LEGACY_DIR` points the harness at the legacy pipeline. Without it, the
-fallback is `../gaze-detection` relative to the repo, which no longer resolves since the
-SDK moved to `C:\projects`.
+`FOCUSEDGAZE_LEGACY_DIR` points the harness at the legacy pipeline and is the reason the
+suite does not care where that pipeline lives. Set it. The fallback is `../gaze-detection`
+relative to the repository root, which does not resolve in the current layout — the SDK is
+on `C:` and the legacy pipeline is on `D:`.
+
+**Always run with `-rs`.** A skip in this suite has already hidden a failing assertion
+once; a bare `pytest -q` reports the skip count without the reason.
 
 ---
 
@@ -192,14 +210,31 @@ checks that had never run.
 ## 9. Open items / waiting on a human
 
 1. **Tier 2 fixture** — blocks the Phase 2 gate. Needs a lit room and a working webcam.
-2. **PyPI / TestPyPI pending publisher** — neither project exists (both 404). That is
-   *consistent with* a pending publisher being registered, which is not publicly visible.
-   **Must be confirmed before the first tag** — the failure mode is a 403 at upload.
-3. **PyPI `0.0.0` placeholder** — not published. Needs Asif's account.
-4. **`milestone6` accuracy baseline** — must be run on unmodified code before any
+2. **Tier 1 calibration fixture is FAILING** — and the failure is a harness defect, not a
+   refactor bug. The fixture pins its expected outputs but loads its input model from a
+   mutable path, and the live `calibration_model.pkl` has since been re-fitted. Proven by
+   replay: the fixture matches one backup exactly (0.0 drift) and every other model by
+   1.0, the width of the `[0,1]` clamp. **Do not "fix" this by re-recording against the
+   current model** — that goes green while discarding the baseline. Fix is audit §33.4:
+   pin the model by SHA-256. Needs a decision.
+3. **`milestone6` accuracy baseline** — must be run on unmodified code before any
    milestone script is deleted (Phase 8). It is the source of the "2.0–2.4 cm" claim.
-5. **SDK venv install** — was still running when this was written. Verify it completed,
-   then run the 19 tests from it.
+   **Run it before recalibrating again**: a baseline measured against a calibration that
+   is later replaced has exactly the problem item 2 describes.
+4. **MediaPipe landmark equivalence — unmeasured.** The two venvs run 0.10.35 and 1.0.0.
+   The A/B needs an image containing a face, so it is blocked behind item 1. Audit §32.3.
+5. **The mediapipe range decision** — `pyproject.toml` now declares `>=0.10.30,<1.1`. The
+   old floor was unreachable on every supported Python. Widening needs a replay per
+   candidate version. Audit §32.5.
+
+### Closed
+
+- **PyPI / TestPyPI pending publisher — CONFIRMED, 2026-08-04.** Pending publishers are
+  registered on both, the `pypi` and `testpypi` GitHub environments exist, and the values
+  were verified against `release.yml`. The pending-publisher path was the correct reading
+  of the two 404s: neither project existed, so the first upload creates it. **`release.yml`
+  needs no change** — its inline instructions already assume exactly this path.
+- **SDK venv install** — completed and verified.
 
 ---
 

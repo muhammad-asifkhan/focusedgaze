@@ -1,0 +1,55 @@
+# Exact pins for reproducing a known-good development environment.
+#
+# pyproject.toml declares RANGES, which is correct for a library — pinning there
+# poisons every downstream resolver (D5). This file is the other half of that
+# decision: the ranges say what is allowed, this says what was actually tested.
+#
+# It is NOT installed by CI. CI deliberately resolves the ranges freshly so that
+# an incompatible new release shows up as a red build rather than being masked by
+# a pin. Use this file when you need to reproduce a specific result — recording a
+# golden fixture, chasing a numeric difference, or bisecting a regression.
+#
+#   pip install -r requirements-dev.txt
+#
+# WHY THIS FILE EXISTS AT ALL (audit 32.6c): pyproject.toml referred to it for
+# months while it did not exist. That absence is the mechanism that let the SDK
+# venv and the legacy venv drift onto different mediapipe majors without anyone
+# noticing, which is audit section 32's whole subject.
+#
+# ── The environment split, stated plainly (audit 31, 32) ────────────────────
+# The legacy pipeline's venv is FROZEN and is the reference implementation the
+# golden fixtures were recorded against. It runs:
+#
+#     mediapipe 0.10.35
+#     onnxruntime-directml 1.24.4   (DirectML / GPU)
+#
+# The versions below are the SDK venv's, which differ in exactly those two
+# packages and agree on everything else. The ONNX difference was measured at
+# 188x under the 1e-4 rad tolerance and is harmless. The MediaPipe landmark
+# difference is UNMEASURED — it needs a face, and the Tier 2 fixture does not
+# exist yet. Do not treat a cross-venv comparison as meaningful until it does.
+#
+# To reproduce the legacy numbers exactly rather than approximately, additionally:
+#     pip install "mediapipe==0.10.35" "onnxruntime-directml==1.24.4"
+# and drop plain onnxruntime. Record in the audit if you do.
+
+# ── Core runtime ────────────────────────────────────────────────────────────
+mediapipe==1.0.0
+numpy==2.5.1
+opencv-python==5.0.0.93
+opencv-contrib-python==5.0.0.93
+platformdirs==4.11.0
+protobuf==7.35.1
+
+# ── ONNX provider (cpu extra; swap for onnxruntime-directml on Windows GPU) ──
+onnxruntime==1.28.0
+
+# ── calibration extra ───────────────────────────────────────────────────────
+scikit-learn==1.9.0
+scipy==1.18.0
+
+# ── server extra ────────────────────────────────────────────────────────────
+# Required for the legacy-comparison tests: the legacy gaze_server imports it,
+# and without it those tests SKIP. That skip concealed a genuine failing
+# assertion for an unknown period (audit 33). Install it.
+websockets==16.1.1
