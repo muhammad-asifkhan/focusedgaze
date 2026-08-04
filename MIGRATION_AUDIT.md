@@ -1580,3 +1580,99 @@ Verified: the working tree of `CONTEXT_HANDOFF.md` now matches zero of the four 
 identity patterns. **Tip only. History is published and was not touched.** One further
 occurrence remains in `STANDING_BRIEF.md` Part D (Phase 11), which names the downstream
 repository by its bare repo name; reported, not changed.
+
+---
+
+---
+
+# 33. The Tier 1 calibration fixture depends on a mutable file — found by removing a skip
+
+## 33.1 How it surfaced
+
+Section 31 recommended adding the `server` extra to the SDK venv so the legacy-comparison
+tests stop skipping, on the principle that **a run where nothing skips is the only figure
+worth quoting**. That was done. The result was not a clean 19.
+
+```
+before (no websockets):  15 passed, 4 skipped, 2 deselected
+after  (websockets):      1 FAILED, 18 passed, 2 deselected
+
+E  AssertionError: calibration drifted by 1.000e+00 (tolerance 1e-09)
+```
+
+The four skips were not four passing tests waiting for a dependency. **Three were, and one
+was a failure that the skip had been concealing.** The skip reason named a missing
+`websockets` import, which reads as an environment gap rather than as a masked assertion,
+so nothing about the earlier output invited suspicion.
+
+This is the same lesson as section 15b, in a new place: there, a hard failure early in CI
+hid three later checks; here, a missing optional dependency hid a failing fixture. **A
+skipped test and a passing test are not interchangeable, and a suite reported as "N passed,
+M skipped" is not evidence until M is zero or every skip is individually justified.**
+
+## 33.2 Root cause — proven, not inferred
+
+The drift is exactly 1.0, which is the width of the `[0,1]` clamp in `apply_calibration`:
+a different polynomial pushes at least one grid corner onto the opposite rail.
+
+The legacy `calibration_model.pkl` had been re-fitted. Rather than assume that, every
+calibration model in the legacy models directory was replayed through the fixture grid:
+
+| model file | worst drift |
+|---|---|
+| `calibration_model.backup-20260803.pkl` | **0.000000e+00 — exact match** |
+| `calibration_model.pkl` (live) | 1.0 |
+| `calibration_model.run5-16pct.pkl` | 1.0 |
+| `calibration_model.run7-10.7pct.pkl` | 1.0 |
+| four further same-day backups | 1.0 |
+
+**The fixture is not wrong and not stale in its numbers.** It is an exact record of one
+specific calibration model. That model still exists on disk under a backup name, and the
+file the harness actually loads has since been replaced by a newer fit.
+
+## 33.3 The real defect — a fixture input discovered from a mutable path
+
+`adapters.py` loads the calibration model from the default path inside the legacy models
+directory. That path is **mutable external state owned by another activity entirely** —
+re-running calibration overwrites it as a matter of normal use. So the fixture pins its
+expected outputs while leaving one of its inputs free to change underneath it.
+
+This is the third instance of one root cause in this project:
+
+1. **F1 (section 1.4)** — the positioning gate resolved its focal file by relative path, so
+   the answer depended on the process working directory.
+2. **Section 19e** — a branch selected by a file's presence was unpinned until recorded
+   both ways.
+3. **This** — a fixture's input model is discovered from a path rather than pinned by
+   identity.
+
+Each time, a value the test depends on was located rather than declared. The generalisation
+worth carrying into Phases 5 and 6: **anything a fixture depends on must be identified by
+content, not by location.** Phase 5 replaces this pickle with JSON plus raw coefficients,
+which is the natural moment to fix it properly.
+
+## 33.4 Recommended fix — not applied, needs a decision
+
+Preferred: **pin the model by identity, not by path.** Record the model's SHA-256 in
+`calibration_apply.json` at record time, have the adapter load the exact recorded file, and
+fail with a message naming the mismatch ("fixture recorded against model <digest>, found
+<digest>") instead of surfacing as an opaque numeric drift. The matching model still exists,
+so this is recoverable without re-recording anything.
+
+Explicitly rejected: **re-recording the fixture against the current model.** That would turn
+green immediately and would be the wrong move — it discards the pinned baseline in favour of
+whichever calibration happened to be on disk today, and it treats a harness defect as if it
+were a data refresh. The fixture's value is that it does not move.
+
+Also rejected: restoring the live `calibration_model.pkl` from the backup. It is a real
+person's current calibration and is not this migration's to overwrite.
+
+## 33.5 Status of the environment change
+
+`websockets==16.1.1` was installed into the SDK venv only, via the `server` extra's declared
+range. A `pip freeze` diff taken before and after shows **exactly one added line and nothing
+upgraded or downgraded** — mediapipe, numpy, protobuf, opencv, onnxruntime, scikit-learn and
+scipy are all unchanged, so the section 31 baseline discipline holds and the section 32
+divergence table is still accurate.
+
+The legacy venv was not touched.
