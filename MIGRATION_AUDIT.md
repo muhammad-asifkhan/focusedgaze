@@ -1812,3 +1812,122 @@ the venv has 4.11.0. Caught by diffing every declared pin against `pip freeze` b
 committing, which is the only reason it is a footnote rather than a defect. Rule 8 exists
 for exactly this: a version number not read from the environment is invented, however
 plausible it looks.
+
+---
+
+---
+
+# 35. First release run — build green, TestPyPI rejected the publisher
+
+`v0.0.0` tagged at `e1de9bf` and pushed on 2026-08-04. This was the first execution of
+`release.yml` in the project's history: nothing in it had ever run.
+
+## 35.1 Result
+
+| Job | Conclusion |
+|---|---|
+| **Build sdist and wheel** | **success** |
+| **Publish to TestPyPI** | **failure** |
+| **Publish to PyPI** | **skipped** |
+
+Every build step passed, including the two that had never been exercised: `twine check` on
+both artifacts, and the forbidden-content audit that fails a release carrying weights,
+calibration pickles or test fixtures. **The Phase 9 distribution audit is therefore proven
+as a gate rather than as an intention** — it ran, on real artifacts, and reported clean.
+
+The `pypi` job was **skipped, not failed**, which is the designed behaviour: it declares
+`needs: testpypi`, so a TestPyPI failure prevents PyPI from being reached at all. The
+Phase 10 requirement that TestPyPI be a required predecessor is confirmed working on its
+first real test. **Nothing was uploaded to either index.**
+
+## 35.2 The exact failure
+
+From the check-run annotation on the failing job (the job-log endpoint returns 403 without
+repository admin rights, so annotations were used instead — see 35.4):
+
+```
+Trusted publishing exchange failure:
+Token request failed: the server refused the request for the following reasons:
+
+* `invalid-publisher`: valid token, but no corresponding publisher
+  (Publisher with matching claims was not found)
+```
+
+The token itself was valid. TestPyPI simply had no publisher whose configuration matched
+the claims GitHub presented. Those claims were:
+
+| Claim | Value presented |
+|---|---|
+| `repository` | `muhammad-asifkhan/focusedgaze` |
+| `repository_owner` | `muhammad-asifkhan` |
+| `workflow_ref` | `muhammad-asifkhan/focusedgaze/.github/workflows/release.yml@refs/tags/v0.0.0` |
+| `environment` | `testpypi` |
+| `ref` | `refs/tags/v0.0.0` |
+
+**All four bound values match what `release.yml` documents.** Owner, repository, workflow
+filename and environment are exactly as specified in its inline setup block. The repository
+side is therefore correct, and the mismatch is on the TestPyPI registration.
+
+This is the failure mode section 27 predicted and section 34.1 believed closed. The
+confirmation recorded in 34.1 was given in good faith and covered PyPI and TestPyPI as a
+pair; the evidence now says the two registrations are not in the same state. **Section 34.1
+is not retracted — it is corrected here: the PyPI registration remains unverified by
+execution, and the TestPyPI one is demonstrably not matching.**
+
+## 35.3 What this does and does not tell us about PyPI
+
+**It says nothing about the PyPI registration.** The `pypi` job never ran, so its publisher
+has still never been exercised. A green TestPyPI job would not have proven PyPI either —
+they are independent registrations on independent services, which is precisely why
+`release.yml` documents them as separate steps. The next run tests exactly one of them at a
+time, in order.
+
+## 35.4 Version 0.0.0 is NOT consumed
+
+Checked directly after the run:
+
+```
+test.pypi.org/pypi/focusedgaze/0.0.0/json -> 404
+pypi.org/pypi/focusedgaze/0.0.0/json      -> 404
+test.pypi.org/pypi/focusedgaze/json       -> 404
+pypi.org/pypi/focusedgaze/json            -> 404
+```
+
+Neither project exists and neither version number has been used. The expectation going into
+this run was that tagging would permanently consume `0.0.0`, since a version can be yanked
+but never reused. **That did not happen, because the upload never occurred** — the publisher
+exchange failed before any artifact was transferred. `0.0.0` remains available on both
+indexes and can be used by the retry once the registration is fixed.
+
+Worth recording as a general point: **an irreversible step is only irreversible once it
+actually executes.** The cost of this failed run was zero, not one burned version number.
+
+## 35.5 Two observations, neither acted on
+
+**(a) The job-log endpoint requires admin.** `GET /actions/jobs/{id}/logs` returns
+403 `Must have admin rights to Repository` without authentication, as section 15c recorded
+for the CI logs. The failure detail was recovered from the **check-run annotations**
+endpoint instead, which is publicly readable and carried the full error including the
+claim set. Recorded because it is the working route for any future unauthenticated
+diagnosis of a failed run in this repository.
+
+**(b) A deprecation warning, non-blocking.** The run emitted
+`Node.js 20 is deprecated ... actions/download-artifact@v4 ... forced to run on Node.js 24`.
+It did not cause the failure and is not being changed as part of diagnosing one — but it
+will need addressing before the deprecation becomes an error.
+
+## 35.6 Deliberately not done
+
+Per instruction, and per standing rule 1 (a failed gate is a result, not an error to work
+around):
+
+- **The publish was not retried.** A retry against an unchanged registration produces an
+  identical failure.
+- **`release.yml` was not modified.** The workflow is not wrong. Every value it presents is
+  the value it documents, and editing it to accommodate a mismatched registration would
+  encode the mismatch into the repository rather than fix it.
+- **No fallback to token-based upload was introduced.** That would convert a configuration
+  problem into a permanent credential in the repository.
+
+The fix is on the TestPyPI side. Until it lands, the release pipeline's status is: build
+verified end to end, publishing unverified on both indexes.
