@@ -52,19 +52,19 @@ def _landmarks(ipd_frac: float, nose_dx: float) -> list[FakeLandmark]:
 def _golden(name: str) -> dict:
     path = FIXTURES / name
     if not path.exists():
-        pytest.skip("fixture missing — run tests/golden/record_tier1.py")
+        pytest.skip("fixture missing: run tests/golden/record_tier1.py")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("fixture", ["positioning_gate.json", "positioning_gate_nofocal.json"])
 def test_matches_legacy_recording(fixture: str) -> None:
-    """Distance, offsets, flags and zone must all be unchanged — on BOTH branches.
+    """Distance, offsets, flags and zone must all be unchanged, on BOTH branches.
 
     `positioning_gate.json` was recorded with a measured focal length reachable;
     `positioning_gate_nofocal.json` with it out of reach, so the legacy gate fell
     back to the assumed-HFOV formula. Only running the first would leave the
     fallback unproven, and that is the branch every user without a measured
-    focal length actually uses — a wrong half-angle or a missing degrees
+    focal length actually uses. A wrong half-angle or a missing degrees
     conversion would sail through a suite that tested the measured path alone.
 
     Here the branch is chosen by an ARGUMENT rather than by a file's presence,
@@ -111,7 +111,7 @@ def test_fallback_branch_is_actually_different_from_measured() -> None:
         return next(c["distance_cm"] for c in d["cases"] if not c.get("result_is_none"))
 
     assert first_distance(a) != first_distance(b), (
-        "measured and fallback focal produced identical distances — "
+        "measured and fallback focal produced identical distances: "
         "the fallback branch is not really being exercised"
     )
 
@@ -138,7 +138,7 @@ def test_result_does_not_depend_on_working_directory(tmp_path, monkeypatch) -> N
 
 
 def test_without_focal_falls_back_to_assumed_fov() -> None:
-    """No calibration is a supported state, not an error — but a different one."""
+    """No calibration is a supported state, not an error, but a different one."""
     lm = _landmarks(0.065, 0.0)
     measured = PositioningGate(focal=FocalCalibration(900.0, 1280))
     assumed = PositioningGate()

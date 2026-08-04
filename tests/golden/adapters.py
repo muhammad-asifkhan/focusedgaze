@@ -5,7 +5,7 @@ under them does. So the test files import from here, and only this module knows
 whether "the implementation" means the legacy `gaze-detection/` scripts or the
 new `focusedgaze` package.
 
-  Phase 1     legacy only — proves the harness reproduces current behaviour
+  Phase 1     legacy only: proves the harness reproduces current behaviour
   Phase 2+    prefers focusedgaze, falls back to legacy
   Phase 8     legacy path deleted
 

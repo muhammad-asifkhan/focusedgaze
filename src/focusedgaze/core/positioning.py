@@ -14,7 +14,7 @@ WHAT CHANGED FROM THE ORIGINAL (and nothing else did)
 The legacy `PositioningGate` read its focal length from `models/camera_focal.json`
 through a **relative** path at construction time. That made its output depend on
 the process working directory: the golden harness measured **117.406 cm from one
-directory and 121.244 cm from another for identical landmarks** — a 3.8 cm swing,
+directory and 121.244 cm from another for identical landmarks**, a 3.8 cm swing,
 larger than the system's entire accuracy budget, decided by where Python was
 launched.
 
@@ -103,7 +103,7 @@ class FocalCalibration:
 
     @classmethod
     def load(cls, path: str | Path) -> FocalCalibration:
-        """Load from a JSON file. The path is explicit — there is no default.
+        """Load from a JSON file. The path is explicit: there is no default.
 
         Raises:
             FileNotFoundError: if the file is absent.
@@ -158,7 +158,7 @@ class PositioningGate:
     Args:
         config: Zone thresholds. Defaults match the shipping system.
         focal: Measured focal length. When omitted, distance is derived from
-            ``config.assumed_hfov_deg``, which is a rough estimate — a real
+            ``config.assumed_hfov_deg``, which is a rough estimate. A real
             measurement is worth taking.
 
     Stateless and therefore thread-safe: :meth:`evaluate` reads only its
@@ -195,13 +195,13 @@ class PositioningGate:
         """Judge one frame's face position.
 
         Args:
-            landmarks: MediaPipe landmarks, including the iris points — the
+            landmarks: MediaPipe landmarks, including the iris points: the
                 refined 478-point model is required.
             frame_shape: ``(height, width, ...)`` as produced by OpenCV.
 
         Returns:
             The status, or ``None`` when the eyes are too close together in the
-            image to measure — under one pixel apart, which means the face is
+            image to measure: under one pixel apart, which means the face is
             far too distant or the landmarks are degenerate.
         """
         cfg = self.config

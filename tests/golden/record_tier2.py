@@ -10,7 +10,7 @@ enters a wheel. The manifest records SHA-256 digests so a fixture can be checked
 for corruption without the frames being in version control.
 
 REGENERATING ON ANOTHER MACHINE
-    Anyone can produce their own Tier 2 fixture — you do not need mine:
+    Anyone can produce their own Tier 2 fixture. You do not need mine:
 
         python tests/golden/record_tier2.py --frames 60
 
@@ -20,7 +20,7 @@ REGENERATING ON ANOTHER MACHINE
     expected values are recorded from the pipeline at record time, the fixture
     is self-consistent regardless of whose face is in it.
 
-Locating the legacy pipeline (rule 4 — no hard-coded paths):
+Locating the legacy pipeline (rule 4, no hard-coded paths):
     FOCUSEDGAZE_LEGACY_DIR   points at the original gaze-detection/ folder.
     If unset, falls back to ../gaze-detection relative to this repository.
 
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         gaze_pipeline.reset_bbox_smoothing()
 
         frames, expected = [], []
-        print(f"Recording {args.frames} frames — look around the screen...")
+        print(f"Recording {args.frames} frames. Look around the screen...")
         idx = 0
         attempts = 0
         while len(frames) < args.frames and attempts < args.frames * 6:

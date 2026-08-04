@@ -1,7 +1,7 @@
 """Record Tier 1 golden fixtures from the CURRENT, UNMODIFIED pipeline.
 
-Run this BEFORE any refactoring. Everything it captures is numeric — no frames,
-no face, nothing biometric — so the output is safe to commit and runs in CI.
+Run this BEFORE any refactoring. Everything it captures is numeric (no frames,
+no face, nothing biometric), so the output is safe to commit and runs in CI.
 
 What it captures, and why these three:
 
@@ -15,7 +15,7 @@ What it captures, and why these three:
 
 Everything upstream of these needs real images and is Tier 2 (local only).
 
-Locating the legacy pipeline (rule 4 — no hard-coded paths):
+Locating the legacy pipeline (rule 4, no hard-coded paths):
     FOCUSEDGAZE_LEGACY_DIR   points at the original gaze-detection/ folder.
     If unset, falls back to ../gaze-detection relative to this repository,
     which is the normal side-by-side checkout layout.
@@ -84,7 +84,7 @@ def record_calibration_apply(cal_utils, model) -> dict:
 def record_one_euro(OneEuro) -> dict:
     """Drive the 1-euro filter with a fixed signal at fixed timestamps.
 
-    Deliberately mixes a slow ramp, a step, and jitter — the three regimes where
+    Deliberately mixes a slow ramp, a step, and jitter: the three regimes where
     an adaptive filter behaves differently.
     """
     import math
@@ -127,7 +127,7 @@ def record_positioning(gate_mod, use_focal: bool = True) -> dict:
 
     Why both are recorded: the legacy gate picks its focal branch by whether a
     FILE EXISTS, not by an argument. Recording only the calibrated branch would
-    leave the fallback unpinned — and that fallback is the branch every user who
+    leave the fallback unpinned, and that fallback is the branch every user who
     has never measured a focal length actually runs. A wrong half-angle or a
     missing degrees-to-radians conversion would pass a suite that only ever
     tests the measured path.

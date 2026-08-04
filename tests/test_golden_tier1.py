@@ -8,7 +8,7 @@ Nothing here needs a camera, a face, or a model file, so it runs in CI on every
 push. It is the safety net rule 2 asks for.
 
 Tolerance: 1e-9. The refactor should be arithmetically identical, not merely
-close — anything looser would hide a real change. If a phase legitimately needs
+close: anything looser would hide a real change. If a phase legitimately needs
 a wider tolerance, that is a DEVIATION, not a quiet edit to this number.
 """
 
@@ -28,7 +28,7 @@ TOL = 1e-9
 def _load(name: str) -> dict:
     path = FIXTURES / name
     if not path.exists():
-        pytest.skip(f"fixture missing: {path.name} — run tests/golden/record_tier1.py")
+        pytest.skip(f"fixture missing: {path.name}. Run tests/golden/record_tier1.py")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -76,10 +76,10 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
 
     Run against BOTH focal branches. The legacy gate selects between a measured
     focal length and an assumed-HFOV fallback by whether a file exists, so a
-    fixture recorded only with the file present leaves the fallback unpinned —
+    fixture recorded only with the file present leaves the fallback unpinned,
     and the fallback is what every user who never measured a focal length runs.
 
-    The booleans and the zone string are compared exactly — a gate that changes
+    The booleans and the zone string are compared exactly: a gate that changes
     its mind about whether you may calibrate is a behaviour change, however
     small the underlying float move.
     """
@@ -90,7 +90,7 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
 
     # FINDING (Phase 1): PositioningGate loads models/camera_focal.json through a
     # RELATIVE path, so the distance it reports depends on the process working
-    # directory — 117.4 cm vs 121.2 cm for identical landmarks, purely from where
+    # directory, 117.4 cm vs 121.2 cm for identical landmarks, purely from where
     # you launched Python. The harness pins the recorded focal context here so the
     # comparison is meaningful. Phase 2 removes the ambiguity by making the focal
     # length explicit configuration instead of an implicit file lookup.

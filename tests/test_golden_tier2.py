@@ -2,7 +2,7 @@
 
 Covers the one stage Tier 1 cannot: MediaPipe landmarks, the smoothed square
 face crop, and L2CS ONNX inference. Needs the recorded frames, which contain a
-real face and are therefore gitignored — so this is marked `hardware` and is
+real face and are therefore gitignored, so this is marked `hardware` and is
 excluded from CI by default (rule 5).
 
 To run it you need a fixture. Make your own:
@@ -30,7 +30,7 @@ MANIFEST = FIXTURES / "manifest.json"
 # Looser than Tier 1's 1e-9. Inference runs on a GPU execution provider whose
 # kernels are not bit-reproducible across drivers, so demanding exactness here
 # would produce flaky failures that say nothing about the refactor. 1e-4 radians
-# is ~0.006 degrees — far below the model's own error, so a real regression
+# is ~0.006 degrees, far below the model's own error, so a real regression
 # still shows up loudly.
 TOL_RAD = 1e-4
 
@@ -58,7 +58,7 @@ def test_frames_match_manifest_digest(fixture_data: dict) -> None:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     assert h.hexdigest() == fixture_data["frames_sha256"], (
-        "frames.npz does not match the digest in manifest.json — re-record it"
+        "frames.npz does not match the digest in manifest.json: re-record it"
     )
 
 
@@ -67,7 +67,7 @@ def test_pitch_yaw_matches_golden(fixture_data: dict) -> None:
 
     Replays the recording through whichever implementation is selected. Face
     detection is stateful (the bounding box is smoothed across frames), so the
-    frames must be fed in their original order from a clean start — which is
+    frames must be fed in their original order from a clean start, which is
     exactly why this replays a sequence rather than isolated images.
     """
     try:

@@ -5,7 +5,7 @@ package implementation against the same Tier 1 fixture that
 `test_golden_tier1.py` runs against the legacy code, so both are measured with
 the same ruler.
 
-Needs no camera, no model, no legacy checkout — pure numbers, runs in CI.
+Needs no camera, no model, no legacy checkout: pure numbers, runs in CI.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ TOL = 1e-9
 def _golden() -> dict:
     path = FIXTURES / "one_euro.json"
     if not path.exists():
-        pytest.skip("fixture missing — run tests/golden/record_tier1.py")
+        pytest.skip("fixture missing: run tests/golden/record_tier1.py")
     return json.loads(path.read_text(encoding="utf-8"))
 
 

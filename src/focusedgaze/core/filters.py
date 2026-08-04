@@ -6,7 +6,7 @@ hold still and lag when you move; this one adapts, filtering hard at low speed
 and easing off as speed rises.
 
 Extracted verbatim from the shipping implementation. The arithmetic is
-unchanged — ``tests/test_golden_tier1.py::test_one_euro_matches_golden`` pins it
+unchanged: ``tests/test_golden_tier1.py::test_one_euro_matches_golden`` pins it
 to within 1e-9 of the recorded pre-refactor output.
 """
 
@@ -43,7 +43,7 @@ class OneEuroFilter:
     def reset(self) -> None:
         """Forget all history.
 
-        Call when the signal is interrupted — a lost face, a mode change — so
+        Call when the signal is interrupted (a lost face, a mode change), so
         the filter does not glide from a stale value when it resumes.
         """
         self._x_prev: float | None = None
@@ -89,7 +89,7 @@ class OneEuroFilter:
 class OneEuroFilter2D:
     """Two independent One Euro filters, for a screen coordinate.
 
-    The axes are filtered separately, exactly as the shipping system does — the
+    The axes are filtered separately, exactly as the shipping system does: the
     horizontal and vertical components of gaze error are not correlated closely
     enough for a joint filter to be worth the complexity.
     """
