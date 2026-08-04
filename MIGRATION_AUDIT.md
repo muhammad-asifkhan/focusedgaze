@@ -1316,6 +1316,78 @@ removes the marker blinds the detector. In each case the mechanism was correct a
 
 ---
 
+## 31. Environment separation — which venv is which
+
+Two virtual environments exist, and **they must never be mixed**.
+
+| Environment | Location | What it is | Install policy |
+|---|---|---|---|
+| **Legacy** | `<legacy-dir>/gaze_env` | The virtualenv of the ORIGINAL pipeline. It is the **reference implementation** the golden harness compares against. | **FROZEN. Nothing may be installed into it again.** |
+| **SDK** | `<repo-root>/.venv` (gitignored) | The package's own development environment. Installed with `-e ".[cpu,calibration,dev]"` — the exact extras CI installs. | Normal dev environment; add what is needed. |
+
+### Why this matters more than it looks
+
+The Tier 1 golden fixtures were recorded by running the legacy pipeline **inside
+`gaze_env`**, and every equivalence proof in this migration is a comparison against numbers
+produced by that specific dependency set. A transitive `numpy`, `protobuf` or `mediapipe`
+bump — the kind an unrelated `pip install` can pull in — would change the reference
+implementation's output. The fixtures would then be measuring the refactor against a moved
+baseline, and the failure would surface much later as a mysterious drift with no obvious
+cause.
+
+**The reference implementation is data, not just code. Its environment is part of the
+measurement.**
+
+### What had already been installed into the legacy venv
+
+Tooling was installed there before the risk was recognised: `pytest`, `pytest-cov`,
+`coverage`, `ruff`, `build`, `twine`, `pyyaml`, `git-filter-repo`, an editable
+`focusedgaze` itself, plus their transitive dependencies — **35 packages** beyond
+`requirements.txt`.
+
+**Audited for damage. None found:**
+
+| Package | Pinned | Installed | Status |
+|---|---|---|---|
+| `numpy` | 2.5.1 | 2.5.1 | unchanged |
+| `protobuf` | 7.35.1 | 7.35.1 | unchanged |
+| `opencv-python` | 5.0.0.93 | 5.0.0.93 | unchanged |
+| `opencv-contrib-python` | 5.0.0.93 | 5.0.0.93 | unchanged |
+| `mediapipe` | 0.10.35 | 0.10.35 | unchanged |
+| `scikit-learn` | 1.9.0 | 1.9.0 | unchanged |
+| `scipy` | 1.18.0 | 1.18.0 | unchanged |
+| `onnxruntime-directml` | 1.24.4 | 1.24.4 | unchanged |
+
+Every addition was purely additive; nothing was upgraded or downgraded. **The Tier 1
+fixtures remain valid and do not need re-recording.** This was luck as much as judgement —
+the SDK's dependency ranges (`numpy>=1.26,<3`, `opencv-python>=4.8,<6`,
+`mediapipe>=0.10.9,<2`) happened to be satisfied by the pinned versions, so pip had no
+reason to move them. A slightly different range would have silently invalidated the
+baseline.
+
+### Standing rule
+
+**Nothing is installed into the legacy venv again.** If a tool is needed to run the legacy
+pipeline, it goes in the SDK venv and the legacy code is imported from there via
+`FOCUSEDGAZE_LEGACY_DIR`, which is exactly what the harness's adapter already does.
+
+If the legacy venv ever must change, the Tier 1 fixtures are re-recorded in the same pass
+and the change is recorded here — never one without the other.
+
+### Consequence for local test runs
+
+The SDK venv installs `[cpu,calibration,dev]`, matching CI, so a local run reproduces CI
+rather than approximating it. It deliberately does **not** include the `server` extra, which
+means `websockets` is absent — and the legacy `gaze_server` module imports it. The harness's
+adapter treats that as `ImplUnavailable` and **skips** the legacy-comparison tests rather
+than failing them, which is the designed behaviour for an environment that cannot reach the
+reference implementation.
+
+To exercise the full legacy comparison locally, add the `server` extra to the SDK venv. The
+figure to quote for a full local run is the one where nothing skips.
+
+---
+
 ## 12. What happens next
 
 Phase 1 is complete and I have stopped at its gate. On your go-ahead I start **Phase 2**
