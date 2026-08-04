@@ -9,16 +9,16 @@ this file records what changed, per phase.
 ## [Unreleased]
 
 ### Added
-- **Phase 1** — package skeleton, `pyproject.toml` (dynamic version, dependency
+- **Phase 1:** package skeleton, `pyproject.toml` (dynamic version, dependency
   ranges, six extras, `py.typed`), MIT `LICENSE`, and a `NOTICE` documenting the
   Gaze360 non-commercial restriction and the never-distribute policy for model
   weights.
-- **Phase 1** — two-tier golden-file regression harness recorded against the
+- **Phase 1:** two-tier golden-file regression harness recorded against the
   *unmodified* legacy pipeline. Tier 1 is numeric and committed (calibration
   polynomial, One Euro filter, positioning gate); Tier 2 covers frames →
   (pitch, yaw), is gitignored, and is regenerable by anyone from their own
   recording.
-- **Phase 2 (in progress)** — `core/filters.py` (`OneEuroFilter`,
+- **Phase 2 (in progress):** `core/filters.py` (`OneEuroFilter`,
   `OneEuroFilter2D`) and `core/positioning.py` (`PositioningGate`,
   `FocalCalibration`, `PositioningConfig`, `PositioningStatus`), both proven
   equivalent to the legacy implementation within 1e-9.
@@ -26,16 +26,16 @@ this file records what changed, per phase.
   owner and repository. TestPyPI is a required predecessor job, and the build
   fails if any distribution contains model weights, calibration profiles or test
   fixtures.
-- `STANDING_BRIEF.md` — the reference for the remainder of the migration.
-- `.mailmap` — normalises the author name across commits without rewriting
+- `STANDING_BRIEF.md`, the reference for the remainder of the migration.
+- `.mailmap`, which normalises the author name across commits without rewriting
   history.
-- `.gitattributes` — line endings normalised to LF in the repository.
+- `.gitattributes`, line endings normalised to LF in the repository.
 
 ### Changed
 - **Behaviour change, deliberate:** the positioning gate no longer reads its
   focal length from a relative path at construction. It is now an explicit
   `FocalCalibration` argument. The legacy behaviour meant identical landmarks
-  produced **117.4 cm or 121.2 cm depending on the process working directory** —
+  produced **117.4 cm or 121.2 cm depending on the process working directory**.
   a 3.8 cm swing, larger than the system's entire accuracy budget. Pinned by
   `test_result_does_not_depend_on_working_directory`.
 
@@ -50,7 +50,7 @@ this file records what changed, per phase.
   assumed.
 - **CI ordering:** `Type-check`, the bare-venv import check and `Test` now run
   even when `Lint` fails. A hard-failing first step was hiding all three, so a
-  single unsorted `__slots__` concealed every check that mattered — and fixing
+  single unsorted `__slots__` concealed every check that mattered, and fixing
   only the lint would have produced a green run while `mypy --strict` had still
   never executed.
 
@@ -59,7 +59,7 @@ this file records what changed, per phase.
   install and run on Linux across Python **3.12, 3.13 and 3.14** (CI run 2).
   `requires-python = ">=3.12"` and the 3.12/3.13 classifiers are now tested
   rather than inferred, closing the Phase 9 wheel task early.
-- **`mypy --strict` passes** on all three versions — first execution.
+- **`mypy --strict` passes** on all three versions, the first execution.
 - **D8 bare-import guarantee holds:** a venv with no ONNX provider, no
   `websockets` and no `scikit-learn` imports the package cleanly.
 - **Test suite passes on Linux**, a platform the golden fixtures were never
