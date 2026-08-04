@@ -1931,3 +1931,138 @@ around):
 
 The fix is on the TestPyPI side. Until it lands, the release pipeline's status is: build
 verified end to end, publishing unverified on both indexes.
+
+---
+
+---
+
+# 36. First successful release, and the documentation rules
+
+## 36.1 Correction to section 34.1: the confirmation was read, not exercised
+
+Section 34.1 recorded Trusted Publishing as confirmed on both indexes. Section 35 then
+recorded TestPyPI rejecting the publisher with `invalid-publisher`. Both are now explained.
+
+The TestPyPI pending publisher had its **environment field set to `pypi`** rather than
+`testpypi`. Owner, repository and workflow filename all matched, and the environment did
+not. That is exactly the shape of the observed error: the token was valid, three of four
+bound values agreed, and no publisher matched the complete claim set. The pypi.org
+registration was correct throughout and was never touched.
+
+**Section 34.1 was not wrong about what was checked. It was wrong about what checking
+proves.** The values were confirmed by reading them back, and reading a configuration back
+tells you what it says, not whether it works. Only using it tells you that.
+
+This is the mutation-check principle from standing rule 2, applied to configuration instead
+of code. Rule 2 exists because a fixture that passes has not been shown to catch anything,
+so the fixture is deliberately broken to prove it is sensitive. A configuration read back
+is the same category of non-evidence: it agrees with itself. The equivalent of a mutation
+check is an actual publish, and it cost a release run to learn.
+
+Recorded as a general rule for the remaining phases: **verifying a configuration by reading
+it back is not the same as verifying it by using it, and only the second kind counts.**
+
+## 36.2 The release that landed
+
+Re-run via `workflow_dispatch` on `main` rather than a new tag, since section 35 established
+that `0.0.0` had never been consumed.
+
+| Job | Conclusion |
+|---|---|
+| Build sdist and wheel | success |
+| Publish to TestPyPI | success |
+| Publish to PyPI | success |
+
+**Both publishers were exercised for the first time, in sequence, and both passed.** The
+PyPI registration had never been reached before this run, so its correctness was unverified
+until now for the same reason TestPyPI's was.
+
+Published and confirmed by fetching each index's JSON API:
+
+```
+https://pypi.org/project/focusedgaze/          0.0.0   wheel + sdist
+https://test.pypi.org/project/focusedgaze/     0.0.0   wheel + sdist
+```
+
+Both records carry `Requires-Python: >=3.12` and the corrected `mediapipe<1.1,>=0.10.30`
+bound from section 34.5, so the range narrowing is now the published metadata rather than a
+local edit.
+
+**`0.0.0` is now consumed on both indexes, permanently.** A version number can be yanked but
+never reused. This was intended: it is the placeholder that reserves the name, which section
+19 recommended and which had been open since Phase 1. That open item is closed.
+
+**A predicted difference that turned out not to matter.** A dispatch run presents
+`ref: refs/heads/main` rather than the tag ref a tag-triggered run presents. Neither
+publisher restricts by ref, so the claim set still matched. Worth recording because the
+prediction was made before the run and held: had it mattered, the error would have changed
+shape rather than disappearing.
+
+## 36.3 The no-em-dash rule, and a deliberate backlog
+
+A house style rule now applies to every document, commit message, docstring and code
+comment: no em-dashes. The rationale is that it is a strong tell of generated text, and in
+one case it was worse than that (see 36.4).
+
+Sweeps completed, each rewriting sentences by what the dash was doing rather than
+substituting a character:
+
+| Scope | Count | State |
+|---|---|---|
+| `README.md` | written clean | done |
+| `NOTICE`, `CONTEXT_HANDOFF.md` | 51 | done |
+| `src/` and `tests/` | 35 | done |
+| `CHANGELOG.md` | 9 | done |
+| `requirements-dev.txt` | 3 | done |
+| `CONTEXT_HANDOFF.md` inside code fences | 6 | **deliberately left** |
+| `.github/workflows/`, `.gitignore` | 4 | **deliberately left** |
+| `MIGRATION_AUDIT.md`, `STANDING_BRIEF.md` | 269 | **deliberate backlog** |
+
+**The three exclusions are decisions, not omissions.**
+
+Code fences, workflows and `.gitignore` are left because the rule exempts anything
+executable, and this project has been broken twice by dash characters in that context. A
+typographic preference is not worth re-running that risk.
+
+`MIGRATION_AUDIT.md` and `STANDING_BRIEF.md` are internal documents, long, and under
+constant edit. Rewriting 269 sentences across them would produce a large diff over text
+nobody outside this project reads, and would collide with every future edit. **The rule
+applies to new writing in both files from now on. The existing backlog is left
+unconverted on purpose, and this paragraph is the record of that decision** so a future
+reader does not mistake it for an incomplete sweep.
+
+## 36.4 An em-dash was a real defect, not only a tell
+
+`cli.py` had an em-dash in its argparse description and in its status line. On a default
+Windows terminal that renders as a replacement glyph, so the first output a new user saw
+from the tool was mojibake in its own help text.
+
+The same class of problem was found in `tests/golden/record_tier2.py`, whose on-screen
+prompt to the person being recorded contained one, and in four `pytest.skip` messages and
+one assertion message. All were strings printed to a console at the moment someone was
+trying to read an instruction.
+
+Fixed as a bug rather than as style. The package was also swept for other non-ASCII in
+printed strings: there is none. Every non-ASCII character in `src/` was an em-dash, with no
+smart quotes, ellipsis characters or non-breaking spaces to worry about.
+
+## 36.5 Standing rule 8 applied to an instruction
+
+The documentation brief offered "2.0 to 2.4 cm within a session, around 3.0 cm on a
+held-out session" as its worked example of preferring specifics to adjectives. Neither
+number has a source in this repository. The first traces to `milestone6`, whose output has
+never been captured here and which section 9 has listed as an open item since Phase 0. The
+second appears nowhere at all.
+
+The README now carries the figures that are sourced, from the originating project's own
+documentation: held-out error around **8.9% of screen size**, roughly **3–8% across the top
+and centre**, and **13–14% along the bottom edge**. The unsupported centimetre figures were
+removed and the gap is named in the README itself rather than quietly dropped.
+
+`DOCUMENTATION_PLAN.md` was added to the repository with that example corrected in place,
+carrying a note explaining why. A brief that demands sourced numbers cannot itself contain
+an unsourced one: the next writer copies the example straight into a public page, which is
+how the original claim reached the README in the first place.
+
+**Rule 8 is usually applied to model URLs, checksums and platform claims. It applies to
+instructions with the same force.** An instruction is not evidence, whoever wrote it.
