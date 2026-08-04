@@ -1397,3 +1397,186 @@ the current module-level `_smoothed_bbox` global makes that impossible today.
 
 Per your closing instruction, **each phase's documentation is written as part of that
 phase, immediately after its implementation** — not deferred. This section is Phase 1's.
+
+---
+
+---
+
+# 32. The two environments run different libraries — measured, Phase 2 blocker
+
+Raised before any Phase 2 code was written. The SDK venv and the legacy venv do not run
+the same libraries, so a Tier 2 replay across them would measure the library upgrade and
+the refactor together, and report the sum as a refactor bug.
+
+## 32.1 The actual divergence — two packages, not the whole set
+
+Measured by importing `importlib.metadata` in each interpreter, not read from a manifest.
+
+| Package | Legacy `gaze_env` | SDK `.venv` | Same? |
+|---|---|---|---|
+| python | 3.14.6 | 3.14.6 | yes |
+| **mediapipe** | **0.10.35** | **1.0.0** | **NO** |
+| **onnxruntime provider** | **directml 1.24.4 (GPU)** | **onnxruntime 1.28.0 (CPU)** | **NO** |
+| numpy | 2.5.1 | 2.5.1 | yes |
+| protobuf | 7.35.1 | 7.35.1 | yes |
+| opencv-python | 5.0.0.93 | 5.0.0.93 | yes |
+| opencv-contrib-python | 5.0.0.93 | 5.0.0.93 | yes |
+| scikit-learn | 1.9.0 | 1.9.0 | yes |
+| scipy | 1.18.0 | 1.18.0 | yes |
+| absl-py | 2.5.0 | 2.5.0 | yes |
+| flatbuffers | 25.12.19 | 25.12.19 | yes |
+
+The divergence is **exactly two packages**. Everything section 31 identified as
+baseline-critical — numpy, protobuf, opencv — is identical. That narrows the remediation
+considerably.
+
+Cause: `pyproject.toml` declares ranges (D5, correctly), the SDK venv was installed with no
+constraints file, and pip took the newest allowed in each range.
+
+## 32.2 ONNX — measured, and it is not a problem
+
+The concern was that a different provider *and* a different runtime version would exceed
+the 1e-4 rad tolerance, which was chosen for GPU non-determinism within one provider.
+
+**This one is answerable without a face**, so it was measured rather than argued. Eight
+deterministic synthetic tensors (fixed seed, ImageNet-normalised, 448x448) were decoded
+through the real `l2cs_gaze360.onnx` in both environments, using the pipeline's exact
+decode. Inputs were verified bit-identical across environments before outputs were
+compared.
+
+| | max abs delta | in degrees |
+|---|---|---|
+| pitch | 5.326322e-07 rad | 3.05e-05 deg |
+| yaw | 2.663161e-07 rad | 1.53e-05 deg |
+
+**188x of headroom under the 1e-4 rad tolerance**, DirectML/1.24.4 versus CPU/1.28.0.
+
+All observed deltas are integer multiples of roughly 1.33e-07 rad, i.e. float32 rounding in
+the bin-weighted sum, not algorithmic divergence. This is expected and worth stating: the
+decode is a **probability-weighted expectation over 90 bins, which is smooth** — a small
+perturbation in the logits moves the output slightly. A hard argmax would have been
+discontinuous and could have jumped a full 4-degree bin on a near-tie.
+
+**Conclusion: the ONNX provider difference does not need to be eliminated for Tier 2 to be
+meaningful.** Aligning it is still worthwhile for cleanliness, but it is not the blocker.
+
+## 32.3 MediaPipe — API identical, engine rebuilt, numerics UNMEASURED
+
+**API surface: identical.** Every element the legacy pipeline touches was compared by
+reflection in both interpreters — the image wrapper and its SRGB format constant, all nine
+`FaceLandmarkerOptions` fields with their defaults, the running-mode enum members, the
+`FaceLandmarker` method set, the `detect_for_video` signature, `FaceLandmarkerResult`
+fields, `BaseOptions` fields, and the normalised-landmark fields. **Zero differences.**
+Declared dependencies and the wheel tag are also identical.
+
+**Upstream release note (authoritative, tag v1.0.0, published 2026-07-28):** it lists **no
+FaceLandmarker change and no vision-task Python change**. Its Python section covers Text
+APIs only. Decisively, one of its own bullets records bumping the MediaPipe version to
+0.10.36 — **1.0.0 is that build renumbered.** PyPI confirms no release exists between
+0.10.35 and 1.0.0. The major version bump is a versioning milestone, not an API break.
+
+**But the native engine was rebuilt**, and that is where the residual risk sits:
+
+| | 0.10.35 | 1.0.0 |
+|---|---|---|
+| bundled task-runtime shared library | 28,736,000 bytes | 43,301,376 bytes |
+| sha256 prefix | `aa8e6c1b` | `a8970c64` |
+
+The release note also lists an Abseil bump (2023-10-18 to 2025-01-14), compiling against
+OpenCV 5 features, an empty-image check added to the image-scaling calculator, and updated
+manylinux build scripts. A toolchain and dependency change of that size can shift float
+results in the last bits even with identical model weights and identical graph semantics.
+
+**The landmarker `.task` asset is external and unchanged** (sha256 prefix `64184e22`,
+loaded from the legacy directory by both), so the landmark model weights are certainly
+identical. Any difference would come from the inference runtime, not from the model.
+
+**What was NOT established: whether landmark outputs are numerically identical.** The A/B
+needs an image containing a face; the only candidate image in the tree detects no face
+under either version, and no Tier 2 fixture exists yet. **This is recorded as unmeasured
+rather than assumed.** Bit-identical output is plausible but unproven, and the crop
+geometry is a min/max over the full landmark set, which is more sensitive to a single moved
+outlier landmark than an average would be.
+
+## 32.4 What CI actually proved about mediapipe — nothing
+
+Resolved with pip's own resolver against the real index, for the Linux platform CI uses:
+
+```
+Linux / Python 3.12 -> Would install mediapipe-1.0.0
+Linux / Python 3.13 -> Would install mediapipe-1.0.0
+Linux / Python 3.14 -> Would install mediapipe-1.0.0
+```
+
+So the green CI run installed **1.0.0**, not 0.10.35. But a grep over `src/` and `tests/`
+shows `mediapipe` is imported in exactly two places — `tests/golden/adapters.py` and
+`tests/golden/record_tier2.py` — and in `adapters.py` it sits inside `make_landmarker()`, a
+lazy closure only Tier 2 calls. On Linux the legacy directory does not exist, so the legacy
+adapter raises `ImplUnavailable` and those tests skip.
+
+**The 19 passing tests never execute a line of mediapipe.** CI proved a wheel installs on
+three Pythons. It did not, and could not, prove anything about landmark equivalence.
+Section 15's wheel-availability conclusion stands unchanged; no equivalence conclusion may
+be drawn from it.
+
+## 32.5 The published mediapipe range cannot be supported — and its floor is unreachable
+
+The declared range is not merely untested at the edges. Its floor **cannot be installed on
+any Python this package supports**:
+
+```
+Linux/3.12  mediapipe==0.10.9 -> No matching distribution
+            available: 0.10.20, 0.10.21, 0.10.30, 0.10.31, 0.10.32, 0.10.33, 0.10.35, 1.0.0
+Linux/3.14  mediapipe==0.10.9 -> No matching distribution
+            available: 0.10.30, 0.10.31, 0.10.32, 0.10.33, 0.10.35, 1.0.0
+```
+
+With `requires-python = ">=3.12"`, the reachable floor is 0.10.20 on 3.12 and 0.10.30 on
+3.14. The declared floor describes versions no user can resolve. It is inert rather than
+harmful, but it is a published claim with nothing behind it. The recommendation is in the
+turn report; **`pyproject.toml` is unchanged pending confirmation**, because it affects
+every downstream install.
+
+## 32.6 Collateral findings
+
+**(a) The legacy pipeline is not at the documented path.** `CONTEXT_HANDOFF.md` sections
+2, 6 and 7 point at a location that does not exist on this machine. The pipeline, its
+frozen venv, the ONNX model and the landmarker asset are all present and intact at a
+different drive and directory. Every documented command that references the old path
+fails, including the Tier 2 recorder invocation. Not corrected in this turn — the path
+appears in several sections and a partial fix would leave the document self-contradicting.
+Proposed as a single consistent pass.
+
+**(b) Section 7 of this audit misdescribes the decode.** It records the angle as an argmax
+scaled by 4 and offset by 180. The code computes a **softmax-weighted expectation** over
+the 90 bins (`gaze_pipeline.py` L61-64), which is a different function with different
+numerical behaviour. Phase 2's `model.py` is to be written from that table, and an
+implementation following it literally would produce a plausible, smooth, wrong result — the
+exact failure class standing rule 2 exists to catch. Flagged; the table is not edited in
+this turn because section 7 is described as the frozen record of preserved defaults.
+
+**(c) `pyproject.toml` refers to a constraints file that does not exist.** Its comment
+states that exact pins live in a dev requirements file for CI. There is no such file, and
+`ci.yml` installs the editable package with extras and no constraints. This is the
+mechanism that let the two environments drift apart, so the comment describes the control
+that would have prevented the problem while the control itself is absent.
+
+**(d) Standing rule 10 is violated at the tip of this file.** Section 29 reproduces
+verbatim both the wrapped source text that defeated a replacement rule and the three
+replacement rules themselves, including the superseded personal name on both sides of the
+arrow. That is the same self-defeating-documentation pattern rule 10 was written for,
+occurring in the section that documents it, and it is a fifth instance rather than a
+fourth. Flagged only — rewriting it is a tip edit on published history and is the reader's
+call.
+
+## 32.7 The one authorised change made this turn
+
+`CONTEXT_HANDOFF.md` section 1 identified the game repository by a GitHub handle belonging
+to the superseded identity, two rows above the line asserting that no second identity
+appears anywhere. Replaced with the phrase "the originating game repository" and no URL,
+matching the wording already used in section 13.
+
+Verified: the working tree of `CONTEXT_HANDOFF.md` now matches zero of the four superseded
+identity patterns. **Tip only. History is published and was not touched.** One further
+occurrence remains in `STANDING_BRIEF.md` Part D (Phase 11), which names the downstream
+repository by its bare repo name; reported, not changed.

@@ -13,7 +13,7 @@ Two separate things, in two separate places:
 
 | | Path | What it is | Git |
 |---|---|---|---|
-| **The game** | `C:\game integration` | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | `github.com/arsid69/game-gaze` |
+| **The game** | `C:\game integration` | A gaze- and gesture-controlled browser game (Three.js). Working, playable. | the originating game repository |
 | **The SDK** | `C:\projects\focusedgaze` | The gaze pipeline extracted from that game into a pip-installable Python package. **This is the active work.** | `github.com/muhammad-asifkhan/focusedgaze` |
 
 The SDK is being extracted **from** `C:\game integration\gaze-detection\` (the "legacy
