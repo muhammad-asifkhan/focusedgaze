@@ -275,13 +275,16 @@ a crashed process needs the process killed to recover.
 
 ---
 
-## 6. Calibration in detail **[UNPROVEN]**
+## 6. Calibration in detail **[SHIPPED]**
 
-> The code exists. Its numerics are not yet verified: the four mutation checks
-> have not been run, so the pure-NumPy `apply()` reproducing scikit-learn's
-> polynomial term ordering is undemonstrated. **A wrong polynomial does not
-> raise.** It returns a smooth, believable surface in the wrong place. Treat
-> coordinates as provisional until this marker changes.
+> The numerics are pinned. `apply()` reproduces the recorded legacy output
+> **exactly** across all 169 fixture cases, not merely within tolerance, and the
+> polynomial term ordering is checked against a real scikit-learn for degrees 1
+> to 8. **A wrong polynomial does not raise** — it returns a smooth, believable
+> surface in the wrong place — so the comparison was also shown to catch all
+> four ways of getting it wrong: transposed coefficients, a permuted term
+> ordering, swapped x/y coefficient sets, and a degree mismatch. See
+> `MIGRATION_AUDIT.md` §43.
 
 ### Headless collection
 
@@ -481,7 +484,7 @@ Then ten lines of Python, as in section 4.
 | Config, types, exceptions | **[SHIPPED]** |
 | One Euro filter, positioning gate | **[SHIPPED]** |
 | Asset registry and downloader | **[SHIPPED]** |
-| Calibration | **[UNPROVEN]** |
+| Calibration | **[SHIPPED]** |
 | `GazeEstimator`, landmarks, ONNX model | **[PLANNED]** |
 | Capture layer, `WebcamGazeTracker` | **[PLANNED]** |
 | CLI | **[PLANNED]** |

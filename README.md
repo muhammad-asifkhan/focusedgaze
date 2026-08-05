@@ -4,12 +4,15 @@ Webcam eye-gaze tracking as a Python library. Point a laptop camera at a face an
 screen coordinate.
 
 > **Status: in development (0.0.0).** Implemented and tested: configuration, result types,
-> the exception tree, the One Euro filter, the positioning gate, and the model registry and
-> downloader. Implemented but **numerically unverified**: calibration. **Not yet written**:
-> the gaze pipeline itself, the capture layer, the CLI and the server. The API shown below
-> is the agreed contract, not working code, and every block that describes it is marked. Do
-> not depend on this release. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has
-> actually landed.
+> the exception tree, the One Euro filter, the positioning gate, the model registry and
+> downloader, and calibration. **Not yet written**: the gaze pipeline itself, the capture
+> layer, the CLI and the server. The API shown below is the agreed contract, not working
+> code, and every block that describes it is marked. Do not depend on this release. See
+> [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has actually landed.
+>
+> **CI is currently red.** The test suite has failed on Linux on every push since
+> `5df7ac1`; lint, type-check and the bare-import check are still green. The cause is not
+> yet identified. See `MIGRATION_AUDIT.md` §42.
 
 ### Documentation
 

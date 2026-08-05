@@ -21,15 +21,16 @@ is implemented; what is missing is missing on purpose, because an ``__all__``
 entry that cannot be imported is worse than an honest omission.
 
     Implemented and tested   config, types, exceptions, filters, positioning,
-                             assets (via ``focusedgaze.assets``)
-    Implemented, UNPROVEN    calibration. It has no tests yet and none of the
-                             four mutation checks have been run, so the
-                             pure-NumPy ``apply()`` reproducing scikit-learn's
-                             term ordering is not yet demonstrated. A wrong
-                             polynomial does not raise: it returns a smooth,
-                             believable surface in the wrong place. Treat
-                             coordinates from it as unverified.
+                             assets (via ``focusedgaze.assets``), calibration
     Not yet implemented      GazeEstimator, WebcamGazeTracker. Phases 2 and 4.
+
+Calibration was the migration's highest numerical risk, because a wrong
+polynomial does not raise: it returns a smooth, believable surface in the wrong
+place. It is now pinned. ``apply()`` reproduces the recorded legacy output
+exactly over all 169 fixture cases, term ordering is checked against a real
+scikit-learn for degrees 1 to 8, and the four mutations that would produce a
+plausible-but-wrong surface are each shown to fail the comparison. See
+``tests/test_calibration_profile.py`` and MIGRATION_AUDIT.md section 43.
 
 Nothing here imports scikit-learn, websockets, or an ONNX provider at import
 time. Fitting a calibration needs scikit-learn, but that import is deferred to

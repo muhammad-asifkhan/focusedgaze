@@ -8,11 +8,12 @@ upper one owns a webcam and is a convenience built on top.
 > under [The intended API](#the-intended-api) is a published contract, not code,
 > and none of it runs.
 
-> **Calibration is implemented but UNPROVEN.** Its tests are still pending and
-> none of the four mutation checks have been run, so the pure-NumPy `apply()`
-> reproducing scikit-learn's polynomial term ordering has not been demonstrated.
-> A wrong polynomial does not raise: it returns a smooth, believable surface in
-> the wrong place. Treat coordinates from it as provisional.
+> **Calibration is verified.** The pure-NumPy `apply()` reproduces the recorded
+> legacy output exactly across all 169 fixture cases, its polynomial term
+> ordering is checked against a real scikit-learn for degrees 1 to 8, and all
+> four mutation checks pass: the comparison was shown to catch transposed
+> coefficients, a permuted term ordering, swapped x/y coefficient sets and a
+> degree mismatch. See `MIGRATION_AUDIT.md` §43.
 
 ---
 
