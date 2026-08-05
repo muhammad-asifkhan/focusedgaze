@@ -2516,6 +2516,66 @@ verification anyway, and two of the failures found were found by running the sui
 reading the reports. **Treat an agent's completion claim as a hypothesis.** The suite is the
 evidence, and for Phase 5 the suite does not yet cover the thing most likely to be wrong.
 
+---
+
+# Section 41 - Tier 2 recorded, and the diagnosis that was wrong for two attempts
+
+## 41.1 The recorded fixture
+
+**Tier 2 exists as of 2026-08-05.** 60 frames, 59 with a face (98.3%), pitch from -0.72 to
+-0.08 rad and yaw from -0.41 to 0.43 rad, so the subject genuinely looked around rather
+than staring at one point. Captured from the **unmodified** legacy pipeline through the
+legacy venv, ONNX on DirectML. About 102 MB, gitignored; only its SHA-256 travels in the
+manifest.
+
+## 41.2 Both previous failures were misdiagnosed
+
+The two earlier attempts were recorded as a muted camera and an unlit room. Probing the
+hardware before touching anything showed **the camera opened on all three backends and
+returned frames.** Neither diagnosis held up.
+
+What was actually happening: the recorder slept a flat **1.0 s** for auto-exposure. Measured
+on this webcam, mean brightness sits around **52/255 for the first 3.5 s** and only climbs
+to about **100/255 by 6.5 s**. So recording began at roughly half the settled brightness,
+and the near-black image that produced was read as a dark room.
+
+**A fixed sleep was never waiting for the thing it existed to wait for.** It waited for a
+duration and hoped that stood in for a state. The failure it caused pointed at the
+environment, which is why it survived two attempts: the misdiagnosis was plausible, and
+nobody measured the camera because the explanation already felt sufficient.
+
+## 41.3 The first fix was also wrong, in an instructive way
+
+Replacing the sleep with a poll was right; the first poll was not. It compared each frame
+with the **previous** one and stopped after 10 steady frames, which it reached at **1.4 s
+and 50.9/255** - part-way up the ramp, and barely better than the sleep it replaced.
+
+At roughly 33 ms apart, a slow climb between consecutive frames is a fraction of a percent,
+so "N consecutive steady frames" is satisfied long before anything has settled. It now
+compares against a reading **1.5 s earlier**, a span comparable to the ramp itself.
+
+Generalising, and worth remembering next time something waits for a signal to stabilise:
+**a stability test whose window is shorter than the transient it is watching will always
+report stable.** It does not fail loudly. It returns early with a confident answer, which is
+the same shape of defect as the fixture in section 37 that matched a mutable input, and as
+the demonstration in 37.10 that confirmed what it was built to confirm.
+
+## 41.4 Two guards, both refusing rather than warning
+
+- **Minimum brightness.** A fixture captured in the dark would pass while pinning degraded
+  behaviour, which is worse than not having one, because it converts a missing test into a
+  misleading one.
+- **Minimum face rate, 50%.** Zero faces was already refused, but a handful is barely
+  better: the fixture would pin mostly the null path while presenting as coverage. Verified
+  by the guard actually firing on a 1/60 run before the real recording succeeded.
+
+Both are flags, so a deliberate exception remains possible and remains visible in the
+command that made it. The manifest now records settled brightness, settle time and face
+rate, so the conditions are data rather than recollection.
+
+Also removed `--settle-frames`, which the rewrite left doing nothing. An option that does
+nothing is a lie in the help text.
+
 ## 38.5 The durable fix, partly applied
 
 **A virtualenv is not a durable artifact.** What saved the baseline was luck of layout, not

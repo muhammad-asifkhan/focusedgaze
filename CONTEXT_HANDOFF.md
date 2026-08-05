@@ -114,18 +114,33 @@ Two tiers. This is the only protection against silently changing behaviour.
 pipeline. Covers the calibration polynomial, the One Euro filter, the positioning gate,
 including both focal branches, non-monotonic timestamps and degenerate geometry.
 
-**Tier 2: gitignored, needs a real face. NOT YET RECORDED.** Covers frames →
-(pitch, yaw). Record with:
+**Tier 2: gitignored, needs a real face. RECORDED 2026-08-05.** Covers frames →
+(pitch, yaw). 60 frames, 59 with a face (98.3%), yaw spanning -0.41 to 0.43 rad, recorded
+from the **unmodified** legacy pipeline through the legacy venv on DirectML. The fixture
+is ~102 MB and gitignored; only its digest travels in the manifest.
+
+Re-record with:
 
 ```bash
-cd C:\projects\focusedgaze
-python tests/golden/record_tier2.py --frames 60
-pytest -m hardware
+set FOCUSEDGAZE_LEGACY_DIR=<the gaze-detection path from section 2>
+<legacy venv python> tests/golden/record_tier2.py --frames 60
+<SDK venv python> -m pytest -m hardware -rs
 ```
 
-Requires the webcam working **and lit**. Two previous attempts failed, once because the
-camera was muted (grey padlock image) and once because the room lights were off
-(brightness 2.8/255). The recorder refuses to write a fixture with no face in it.
+Record with the **legacy** interpreter, replay with the **SDK** one. The legacy venv has
+no pytest and must not have any installed into it.
+
+**Why the two earlier attempts failed, and it was not what was recorded at the time.**
+They were blamed on a muted camera and an unlit room. Probing the hardware showed the
+camera opened fine on all three backends. The real cause was that the recorder slept a
+flat 1.0 s for auto-exposure, while this webcam sits near 52/255 for the first 3.5 s and
+only reaches about 100/255 by 6.5 s. It was capturing at roughly half the settled
+brightness, and the near-black image that resulted got read as a dark room.
+
+The recorder now polls until brightness stops climbing, and refuses to write below a
+minimum brightness or below a 50% face rate. Both thresholds are flags. The manifest
+records the brightness, settle time and face rate it was captured at, so a fixture that
+looks wrong later can be explained from data instead of memory. See audit §41.
 
 **Implementation selection** lives in `tests/golden/adapters.py`, not in the tests, so
 assertions stay frozen while the code beneath them is replaced.
