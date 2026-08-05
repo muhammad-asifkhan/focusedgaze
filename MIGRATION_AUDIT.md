@@ -2591,3 +2591,217 @@ into a failing test, which is the same principle as pinning the calibration fixt
 in section 37. Until that exists, the golden baseline is still one directory deletion away
 from being unreproducible, and the recorded package list is the only thing standing behind
 it.
+
+---
+
+# Section 42 - The gate that reported instead of gating
+
+## 42.1 What was true, and for how long
+
+CI has been **red on every push since `49a8f3d`**. Retrieved from the REST API rather than
+the run pages, because the HTML view shows the newest run and this needed the sequence:
+
+| Run created | Commit | Conclusion |
+|---|---|---|
+| 2026-08-04T17:30:49Z | `49a8f3d` | success |
+| 2026-08-05T05:58:43Z | `5df7ac1` | **failure** |
+| 2026-08-05T06:12:12Z | `d0b804f` | **failure** |
+| 2026-08-05T07:16:09Z | `3ad8db1` | **failure** |
+| 2026-08-05T07:24:28Z | `8006a0c` | **failure** |
+| 2026-08-05T07:33:37Z | `8006a0c` | **failure** |
+
+Five consecutive red runs across roughly ninety minutes, and **no document in this
+repository said so**. `CHANGELOG.md`'s Verified section still claimed the suite passes on
+Linux throughout. That claim was recorded when it was true, at `49a8f3d`, and was never
+revisited when the Phase 3/5/6 batch landed on top of it.
+
+Per-step, identical on all three matrix jobs (`3.12`, `3.13`, `3.14`) in run `30985498642`:
+
+    Install                                         success
+    Lint                                            success
+    Type-check                                      success
+    Core imports with optional dependencies absent  success
+    Test                                            FAILURE
+
+So `ruff`, `mypy --strict` and the D8 bare-import guarantee are all still green on Linux.
+The failure is confined to the suite itself.
+
+## 42.2 Why this is a rule 1 failure and not just a red build
+
+Standing rule 1 says verification is a **gate**, not a report. A gate that goes red and is
+neither read nor recorded has silently become a report, and a report nobody reads is
+decoration. The batch that turned it red is the same parallel run section 40 already
+criticised for landing two tests that could never have passed as written. The lesson there
+was to treat an agent's completion claim as a hypothesis, because the suite is the evidence.
+That lesson was learned about the local suite and never applied to the remote one.
+
+The specific mechanism worth naming: **the local suite and CI disagree, and only the local
+one was being consulted.** On this machine the suite is green - 194 passed at `8006a0c`,
+206 after section 43 - both with and without `FOCUSEDGAZE_LEGACY_DIR` set. Whatever fails on
+Linux does not fail on Windows, so every local run reinforced a conclusion CI was
+contradicting.
+
+## 42.3 What is not yet known
+
+**The failing assertion has not been identified.** The Actions log endpoint returns HTTP 403
+without authentication, `gh` is not installed on this machine, and the public check-run
+annotations carry only an exit-code-1 message. That annotation is attributed to `.github`
+line 63, which is the `mypy` step; the per-step API reports Type-check as success, so the
+line attribution is wrong and the step list is authoritative. Recorded here because a future
+reader will otherwise re-derive that same false lead.
+
+Reproduction attempts on this machine, all green, so none of them is the cause:
+
+- full suite with the legacy tree present: 194 passed, 2 deselected, zero skips;
+- full suite with `FOCUSEDGAZE_LEGACY_DIR` unset, which is the CI condition: 189 passed,
+  5 skipped, 2 deselected;
+- `ruff check src tests` and `mypy --strict`: both clean.
+
+The difference is therefore Linux, the CI install, or a version resolved differently there.
+Candidates worth checking first, given that the batch which broke it was Phases 3/5/6:
+filesystem case sensitivity, path separators in the assets cache tests, or `platformdirs`
+returning a differently-shaped path.
+
+**This section will be incomplete until somebody reads the log.** It records that the gate
+failed and that the cause is unknown; it does not diagnose it, and it must not be read as
+though it had.
+
+## 42.4 The durable fix, not yet applied
+
+Nothing in this project notices a red CI. The audit records what was run locally, and the
+local run is the one that cannot see the failure. Options, none implemented:
+
+- a required status check on `main`, so a red run blocks the push rather than annotating it;
+- a status line in the audit or CHANGELOG updated per phase gate from the API, not from
+  memory.
+
+Until one exists, a claim that the suite passes means it passes **on Windows**, and every
+such claim in this repository should be read that way.
+
+---
+
+# Section 43 - Phase 5 verified: the calibration polynomial has teeth
+
+## 43.1 What section 40.2 said, and what closed it
+
+Section 40.2 recorded the highest-risk numerical work in the migration with no dedicated
+test file, and **none of the four mutation checks run**. `tests/test_calibration_profile.py`
+now exists: 12 tests, of which 4 need no scikit-learn.
+
+The headline number: **`apply()` reproduces the legacy recording exactly.**
+
+    cases compared : 169
+    worst drift    : 0.000e+00   (tolerance 1e-9)
+
+Not merely within tolerance - bit for bit, across every recorded case. The pure-NumPy path
+evaluates the identical surface the pickled scikit-learn pipeline did. The assertion is
+still written against `1e-9` rather than zero, because BLAS may legitimately pick a
+different kernel elsewhere and a last-bit difference is not the defect being hunted.
+
+## 43.2 The four mutations, measured
+
+Against the committed fixture, tolerance 1e-9:
+
+| Mutation | Worst drift | Caught |
+|---|---|---|
+| (control) unmutated | 0.000e+00 | passes, as required |
+| transposed coefficient order | 8.318e-01 | yes |
+| wrong term ordering (rows 1 and 2 exchanged) | 1.000e+00 | yes |
+| swapped x/y coefficient sets | 1.000e+00 | yes |
+| degree 2 instead of degree 3 | 3.138e-02 | yes |
+
+The transposed-order row reproduces section 37.4's 8.318e-01 exactly, which is the expected
+result: same mutation, same fixture, now applied to the new implementation rather than the
+legacy one. Two independent paths agreeing on a number neither was tuned to produce is worth
+more than either alone.
+
+Term ordering was also checked directly against a real `PolynomialFeatures` for **degrees 1
+through 8**, not only the 3 the system uses. The claim being made is about the construction,
+so it is tested as a construction.
+
+## 43.3 The degree mutation is only detectable on a cubic surface
+
+The weakest row above is the degree mismatch at 3.138e-02, and it is weak for a reason worth
+writing down: **it is a property of the fixture's data, not of the code.** If the synthetic
+target in `make_synthetic_calibration.py` were ever flattened, evaluating the model at
+degree 2 would drift by nearly nothing, that row would stop failing, and the suite would go
+on reporting that it catches a degree mismatch when it no longer did.
+
+A comment would not survive a tidy-up. So the property is **asserted**:
+`test_the_recorded_surface_is_genuinely_cubic` requires the largest cubic coefficient to be
+at least 5% of the largest coefficient overall. Measured when written: 0.2805 against
+0.9501, i.e. **29.5%**, so there is a wide margin, and a future regeneration that flattens
+the surface fails with a message naming the file to fix.
+
+This is the section 37 lesson in a third costume: a test whose input is free to change
+underneath it is pinned to nothing.
+
+## 43.4 A guard that had never executed
+
+`_check_powers_match_sklearn` runs on every path that reads coefficients out of scikit-learn
+and hard-fails if a future release reorders its feature expansion. Coverage showed **its
+body had never been reached by any test**. It was a plausible-looking block with no evidence
+it did anything.
+
+Four tests now cover it, all scikit-learn-free because the check is pure NumPy: it accepts
+the order this package generates (the control - a guard that rejected everything would pass
+the negative test too), rejects a permuted table, rejects a table of the wrong size, and
+names both orders in its message.
+
+## 43.5 The tests were shown to fail
+
+Standing rule 2 applied to the new file itself, since a test file that only ever passes is
+the thing this project keeps getting caught by. Each defect was introduced and the relevant
+test confirmed to fail:
+
+| Defect introduced | Result |
+|---|---|
+| `polynomial_powers` returns a reversed table | caught at degree 1 |
+| `apply()` nudged by 1e-8, four orders below a real bug | caught, both equivalence tests |
+| fixture surface flattened in its cubic terms | caught by the cubic-weight assertion |
+| the term-order guard replaced with a no-op | caught: the expected error was not raised |
+| a model whose digest disagrees with the recording | caught by the fixture's digest assertion |
+
+The 1e-8 row is the important one: sensitivity extends far below the magnitude any of the
+four real mutations produce.
+
+## 43.6 Both dependency branches recorded
+
+Rule 3: a branch selected by a package being present is unpinned unless recorded both ways.
+
+    with scikit-learn      12 passed
+    without scikit-learn    4 passed, 8 skipped
+
+The skips name their reason and are actionable. The four that still run are the term-order
+guard tests, which is the right split: they are the ones that must hold in a base install,
+where `apply()` runs and no fitter ever will.
+
+One trap found while recording the second branch, worth keeping. The first attempt blocked
+scikit-learn by raising a plain `ImportError`, and the tests **errored instead of skipping**.
+`pytest.importorskip` only skips on `ModuleNotFoundError`; a bare `ImportError` means
+installed-but-broken, which is a genuinely different condition that must not be skipped
+past. The simulation was wrong, not the tests. **A negative test that does not reproduce the
+real absence is testing a condition that never occurs.**
+
+## 43.7 Coverage
+
+| Module | Before | After |
+|---|---|---|
+| `calibration/profile.py` | 23% | **56%** |
+| `calibration/fitter.py` | 27% | **59%** |
+| Total | 66% | **78%** |
+
+Still short of the Phase 8 target of 80%, and the remainder is concentrated in
+`collector.py` (48%) and the profile's on-disk paths, neither of which this file set out to
+cover. What is now covered is the arithmetic, which is the part that fails silently.
+
+## 43.8 Still open
+
+- `fit_calibration` defaults to `degree=2` while `robust_fit_samples`, the shipping path,
+  uses 3. Section 37.4 flagged this as the live risk from F3 and it is still live. The
+  degree mutation now proves the fixture would catch a mismatch; it does not remove the
+  asymmetry that makes one plausible.
+- `calibration/ui.py` is still a stub.
+- `migrate_pickle` needs scikit-learn, because the legacy pickle holds live estimator
+  objects. Inherent to the format and documented, but it means the migration path, unlike
+  the apply path, is not available in a base install.
