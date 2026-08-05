@@ -198,8 +198,8 @@ class ModelAsset:
         if self.url is not None:
             lines += [f"Direct download: {self.url}", ""]
         lines += [
-            f"Alternatively set {MODEL_DIR_ENV} to a directory that already "
-            f"contains {self.filename}.",
+            (f"Alternatively set {MODEL_DIR_ENV} to a directory that already "
+             f"contains {self.filename}."),
             f"Licence: {self.licence} ({self.licence_url})",
         ]
         return "\n".join(lines)

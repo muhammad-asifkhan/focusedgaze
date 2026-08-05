@@ -381,8 +381,17 @@ class CalibrationProfile:
         """How many polynomial terms the profile carries."""
         return int(self.powers.shape[0])
 
-    def _terms(self, pitch: NDArray[np.float64], yaw: NDArray[np.float64]) -> NDArray[np.float64]:
+    def _terms(
+        self,
+        pitch: NDArray[np.float64] | np.float64,
+        yaw: NDArray[np.float64] | np.float64,
+    ) -> NDArray[np.float64]:
         """Expand (pitch, yaw) into the profile's polynomial terms.
+
+        Accepts scalars as well as arrays: ``apply`` deliberately evaluates one
+        reading at a time rather than routing through the batch path, so both
+        shapes reach here. ``np.stack`` and ``np.prod`` handle either, and the
+        return is an array in both cases.
 
         The last axis of the result indexes terms, in the order ``powers``
         declares, so ``terms @ coef`` attaches every coefficient to the term it
@@ -800,7 +809,7 @@ def migrate_pickle(
     try:
         with source.open("rb") as handle:
             model = pickle.load(handle)
-    except Exception as exc:  # noqa: BLE001 - unpickling can raise essentially anything
+    except Exception as exc:
         raise CalibrationError(
             f"cannot unpickle {source}: {exc!r}. Legacy profiles embed scikit-learn "
             "estimator objects, so migration needs scikit-learn installed "

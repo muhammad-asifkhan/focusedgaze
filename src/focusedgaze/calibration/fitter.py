@@ -267,7 +267,7 @@ def _holdout_error(
     n = int(data.shape[0])
     if fraction <= 0.0:
         return None
-    n_val = int(round(n * fraction))
+    n_val = round(n * fraction)          # round() with one argument already returns int
     n_train = n - n_val
     n_terms = int(polynomial_powers(degree).shape[0])
     if n_val < 1 or n_train < n_terms:

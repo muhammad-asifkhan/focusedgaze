@@ -1,113 +1,225 @@
 # Using focusedgaze
 
-Two layers. The lower one is pure computation and is the point of the design. The upper one
-owns a webcam and is a convenience built on top.
+Two layers. The lower one is pure computation and is the point of the design. The
+upper one owns a webcam and is a convenience built on top.
 
-> **Status.** The two modules shown under [What works today](#what-works-today) are
-> implemented, tested against the original implementation, and the examples below were
-> executed to produce the output shown. Everything under
-> [The intended API](#the-intended-api) is a contract, not code. It is marked as such and
-> none of it runs.
+> **Status.** Everything under [What works today](#what-works-today) is
+> implemented and its examples were executed against the shipped package. Anything
+> under [The intended API](#the-intended-api) is a published contract, not code,
+> and none of it runs.
+
+> **Calibration is implemented but UNPROVEN.** Its tests are still pending and
+> none of the four mutation checks have been run, so the pure-NumPy `apply()`
+> reproducing scikit-learn's polynomial term ordering has not been demonstrated.
+> A wrong polynomial does not raise: it returns a smooth, believable surface in
+> the wrong place. Treat coordinates from it as provisional.
+
+---
+
+## Install
+
+```bash
+pip install -e ".[cpu,calibration,dev]"
+```
+
+Pick exactly one ONNX execution provider: `cpu`, `directml` (Windows GPU), or
+`cuda`. The base install declares none on purpose, so the choice is yours and a
+missing provider is reported with a named remedy rather than a bare `ImportError`.
+
+`calibration` adds scikit-learn and scipy. They are needed to *fit* a profile and
+never to *apply* one.
+
+---
 
 ## What works today
 
-Two modules are extracted: the One Euro filter and the positioning gate.
+Configuration, result types, the exception tree, the One Euro filter, the
+positioning gate, the asset registry, and calibration.
+
+### Configuration
+
+Every tunable that used to be a module-level constant is now a frozen dataclass,
+so nothing can drift underneath you at runtime and two configurations can coexist
+in one process. Defaults reproduce the deployed system exactly.
+
+```python
+from focusedgaze import GazeConfig
+
+cfg = GazeConfig()
+print(cfg.filter.min_cutoff)                 # 0.7
+print(cfg.filter.beta)                       # 0.6
+print(cfg.camera.width, cfg.camera.height)   # 1280 720
+print(cfg.positioning.min_distance_cm)       # 45.0
+print(cfg.runtime.dwell_ms)                  # 1050.0
+```
+
+Override by construction, from a dict, or from a file. `GazeConfig.from_file`
+reads TOML or JSON, chosen by extension.
+
+```python
+from focusedgaze import GazeConfig, FilterConfig
+
+snappier = GazeConfig(filter=FilterConfig(min_cutoff=1.0, beta=0.9))
+partial  = GazeConfig.from_dict({"filter": {"beta": 0.9}, "camera": {"index": 1}})
+
+assert GazeConfig.from_dict(snappier.to_dict()) == snappier
+```
+
+Invalid values raise `ConfigError`, which is also a `ValueError`, so the handler
+you already have around argument validation will catch it.
+
+```python
+from focusedgaze import ConfigError, FilterConfig
+
+try:
+    FilterConfig(min_cutoff=-1.0)
+except ConfigError as exc:
+    print("rejected:", exc)
+```
+
+### Results and status
+
+`GazeResult` is frozen, and `ok` is derived from `status` rather than stored
+beside it, so the two cannot disagree.
+
+```python
+from focusedgaze import GazeResult, GazeStatus
+
+r = GazeResult(x=0.5, y=0.4, pitch=0.1, yaw=-0.2,
+               distance_cm=55.0, status=GazeStatus.OK, timestamp=0.0)
+print(r.ok)                                  # True
+
+blind = GazeResult(x=None, y=None, pitch=None, yaw=None,
+                   distance_cm=None, status=GazeStatus.NO_FACE, timestamp=0.0)
+print(blind.ok)                              # False
+```
+
+The five statuses separate cases the legacy pipeline collapsed into a bare `None`,
+which is why a caller could not tell a bad frame from a broken install.
+
+| Status | Meaning |
+|---|---|
+| `OK` | A usable gaze point. `x` and `y` are set. |
+| `NO_FACE` | No face detected in this frame. |
+| `OUT_OF_RANGE` | Face found, but too close or too far. |
+| `OFF_CENTER` | Face found at a usable distance, but not centred enough. |
+| `NOT_CALIBRATED` | Gaze angles available, but no profile to map them to a screen. |
+
+These are recoverable per-frame conditions, not errors. None of them raise.
+Genuine faults raise from the exception tree instead.
 
 ### Smoothing a jittery signal
 
-Raw gaze coordinates jump around, partly from real micro-movements of the eye and partly
-from model noise. The One Euro filter smooths them without the lag a simple moving average
-introduces, by adapting how hard it smooths to how fast the signal is moving. Slow movement
-gets smoothed heavily, fast movement is passed through almost untouched, so the pointer sits
-still when you stare and keeps up when you flick across the screen.
+Raw gaze coordinates jump around, partly from real micro-movements of the eye and
+partly from model noise. The One Euro filter smooths them without the lag a moving
+average introduces, by adapting how hard it smooths to how fast the signal moves.
+It is usable on its own, on any 2D signal.
 
 ```python
 from focusedgaze.core.filters import OneEuroFilter2D
 
-# Defaults match the deployed system exactly.
 f = OneEuroFilter2D(min_cutoff=0.7, beta=0.6, d_cutoff=1.0)
-
-samples = [
-    (0.500, 0.500, 0.000),
-    (0.550, 0.480, 0.033),
-    (0.520, 0.510, 0.066),
-    (0.700, 0.300, 0.100),   # a fast flick
-    (0.710, 0.295, 0.133),
-]
-
-for x, y, t in samples:
-    sx, sy = f.filter(x, y, t)
-    print(f"raw ({x:.3f}, {y:.3f})  ->  smoothed ({sx:.4f}, {sy:.4f})")
+for i, (x, y) in enumerate([(0.50, 0.40), (0.52, 0.41), (0.51, 0.40)]):
+    sx, sy = f.filter(x, y, i / 30.0)
+    print(f"{sx:.4f} {sy:.4f}")
 ```
 
-Output:
-
-```
-raw (0.500, 0.500)  ->  smoothed (0.5000, 0.5000)
-raw (0.550, 0.480)  ->  smoothed (0.5075, 0.4973)
-raw (0.520, 0.510)  ->  smoothed (0.5094, 0.4989)
-raw (0.700, 0.300)  ->  smoothed (0.5540, 0.4550)
-raw (0.710, 0.295)  ->  smoothed (0.5963, 0.4129)
-```
-
-Compare the second row with the fourth. On the small move the filter passes through about
-15% of the raw change, and on the flick about 25%. That is the adaptive part working: the
-velocity term opens the cutoff up when the signal is genuinely moving. It is a shift in
-responsiveness, not a switch, so a fast movement still arrives smoothed over a few frames
-rather than instantly.
-
-The third argument is a timestamp in seconds, not a frame number. The filter derives its
-sampling rate from the gaps between timestamps, so passing a counter will give you
-confidently wrong smoothing. Pass `time.perf_counter()` or the capture timestamp.
-
-Call `reset()` when the signal is interrupted, for example when the face is lost or the user
-switches modes. Without it the filter glides from a stale value when tracking resumes.
-
-`OneEuroFilter` is the same thing for a single axis. `OneEuroFilter2D` filters the two axes
-independently, exactly as the original system does.
+Higher `beta` is snappier on fast movement and lets more jitter through. Lower
+`min_cutoff` is steadier at rest and adds lag. Note that smoothing harder stops
+buying steadiness once the filter can no longer keep up: `examples/filter_demo.py`
+measures that rather than asserting it.
 
 ### Checking whether the user is positioned usably
 
-`PositioningGate` answers a question you need before the gaze reading means anything: is the
-face close enough, far enough, and centred enough for the calibration to apply? It works on
-MediaPipe landmarks alone and needs no gaze model.
+```python
+from focusedgaze.core.positioning import PositioningGate
+from focusedgaze import PositioningConfig
+
+gate = PositioningGate(PositioningConfig())
+print(gate.config.min_distance_cm, "to", gate.config.max_distance_cm, "cm")
+```
+
+Distance is estimated from the inter-pupil distance in pixels against a measured
+focal length. Without a focal calibration it falls back to an assumed horizontal
+field of view, which is less accurate. Both branches are pinned by the golden
+fixtures.
+
+### Exceptions
+
+Everything the package raises descends from `GazeError`, so one handler covers the
+library without swallowing unrelated failures.
 
 ```python
-from focusedgaze.core.positioning import PositioningGate, PositioningConfig
+from focusedgaze import GazeError, ProviderError, ModelNotFoundError
 
-cfg = PositioningConfig()
-print(f"accepted distance: {cfg.min_distance_cm:.0f} to {cfg.max_distance_cm:.0f} cm")
-
-gate = PositioningGate()
-print("gate ready:", type(gate).__name__)
+print(issubclass(ProviderError, GazeError))               # True
+print(issubclass(ModelNotFoundError, FileNotFoundError))  # True
 ```
 
-Output:
+`ProviderError` exists so a missing ONNX provider is an expected state with a
+named remedy. `ModelNotFoundError` is also a `FileNotFoundError`, and
+`ConfigError` is also a `ValueError`, because those are what callers already
+catch.
 
+### Models and the cache
+
+Weights are never shipped in the wheel. The registry knows each asset, its
+expected SHA-256, and whether it may be fetched automatically.
+
+```python
+from focusedgaze.assets import REGISTRY, cache_dir
+
+print(cache_dir())
+for asset in REGISTRY.values():          # REGISTRY is a dict keyed by asset name
+    print(asset.name, asset.licence, "auto-download:", asset.auto_download)
 ```
-accepted distance: 45 to 65 cm
-gate ready: PositioningGate
+
+Each entry records its licence, the URL it came from, the `source` page that URL
+was read off, and the expected digest, so a checksum in this repository can be
+traced back to something citable rather than taken on trust.
+
+The MediaPipe face landmarker may download automatically. **The gaze weights may
+not.** They derive from the Gaze360 dataset, which is non-commercial research
+only, so the package prints instructions and stops rather than fetching them on
+your behalf. See `NOTICE`.
+
+Set `FOCUSEDGAZE_MODEL_DIR` to a directory of local models to skip the network
+entirely, which is what you want on an offline or locked-down machine.
+
+### Calibration
+
+Read the calibration warning at the top of this page first.
+
+Calibration is per person, per machine, and per seating position. It is the file
+the whole system depends on.
+
+```python
+from focusedgaze import CalibrationCollector, list_profiles
+
+collector = CalibrationCollector()
+collector.add_sample(pitch=0.10, yaw=-0.20, target_x=0.1, target_y=0.1)
+# ... many more samples, spread across the screen ...
+
+print(list_profiles())        # named profiles already on this machine
 ```
 
-Distance is estimated from the pixel distance between the irises against an assumed real
-interpupillary distance, which means it needs the refined 478-point landmark model rather
-than the 468-point one.
+Collection is headless and scriptable, so it does not require the on-screen
+routine.
 
-**Measure your focal length if you can.** Without a measured value the gate falls back to
-estimating from an assumed 60 degree horizontal field of view, and that estimate is rough.
-The difference is not academic: for identical landmarks, the measured and assumed paths
-produced **117.4 cm against 121.2 cm** in testing. A one-off measurement at a known distance
-is worth taking, and the gate can record it.
+Fitting needs scikit-learn; applying does not. That split is the whole point of
+the format. A saved profile stores plain polynomial coefficients plus metadata,
+not a pickled scikit-learn object, so loading one neither requires scikit-learn
+nor breaks when scikit-learn changes version, and it is not an arbitrary-code
+execution risk the way unpickling is.
 
-That discrepancy was originally a bug rather than a configuration choice. The gate resolved
-its focal file through a relative path, so the same landmarks gave different distances
-depending on which directory you launched Python from. focusedgaze makes the focal length
-explicit configuration instead of an implicit file lookup.
+`migrate_pickle` converts an existing legacy `.pkl` profile to the new format.
+
+---
 
 ## The intended API
 
-> **None of this runs.** It is the contract Phases 2 to 4 are being built against, published
-> here so the shape can be argued with before it is set, rather than discovered afterwards.
+> **None of this runs yet.** It is the contract Phases 2 and 4 are being built
+> against, published so it can be reviewed and argued with before it exists.
 
 ### The pure layer
 
@@ -115,22 +227,18 @@ explicit configuration instead of an implicit file lookup.
 from focusedgaze import GazeEstimator, CalibrationProfile
 
 est = GazeEstimator(profile=CalibrationProfile.load("default"))
-result = est.process(frame_bgr, timestamp=t)
-
-if result.ok:
-    print(result.x, result.y)        # screen coordinates in [0, 1]
-    print(result.pitch, result.yaw)  # raw model output, radians
+result = est.process(frame_bgr, timestamp=t)     # -> GazeResult
 ```
 
-`process()` does no I/O. It takes a frame and a timestamp and returns a result. That is the
-whole interface, and it is what makes the library usable from a video file, from another
-capture library, from a camera shared with a hand tracker, or from a test that has to be
-reproducible.
+No camera, no window, no socket. You supply frames from anywhere: a video file,
+another capture library, a shared camera, or a test fixture. This is what makes
+the package testable in CI without hardware, and what makes it usable to someone
+who already has frames.
 
-Two `GazeEstimator` instances in one process must not interfere with each other. In the
-original code they would, because bounding-box smoothing lives in a module-level global.
-Making that instance state is one of the two riskiest edits in Phase 2, and it has a test
-pinning it.
+Two `GazeEstimator` instances in one process must not interfere. In the legacy
+pipeline the bounding-box smoothing lived in a module-level global, so they did.
+Making that instance state is one of the two riskiest edits in Phase 2 and has a
+test waiting for it.
 
 ### The convenience layer
 
@@ -143,27 +251,26 @@ with WebcamGazeTracker(profile="default") as tracker:
             print(result.x, result.y)
 ```
 
-Use the context manager. It guarantees the camera is released, including on an exception,
-and a webcam held by a crashed process is an annoying thing to debug.
+The context manager guarantees the camera is released, including on exception.
+
+### A note on naming
+
+The original brief named the calibration entry point `Calibrator`. It landed as
+`CalibrationCollector` plus `fit_calibration`, splitting collection from fitting.
+That is a change to the published contract, so it is flagged as an open question
+rather than quietly adopted.
+
+---
 
 ## Running the tests
 
-The suite compares focusedgaze against the original implementation where both exist.
-
 ```bash
-set FOCUSEDGAZE_LEGACY_DIR=<path to your gaze-detection checkout>
+set FOCUSEDGAZE_LEGACY_DIR=<path to the legacy gaze-detection directory>
 pytest -q -rs
 ```
 
-Point `FOCUSEDGAZE_LEGACY_DIR` at the original `gaze-detection` folder. Without it the
-comparison tests skip rather than fail, which is correct behaviour for an environment that
-cannot reach the reference implementation, but it means a clean run is not proof of much.
+Always pass `-rs`. A skip in this suite has already concealed a failing assertion
+once, and a bare `pytest -q` reports the count without the reason.
 
-**Always pass `-rs`.** It prints the reason for each skip. In this project a skip has
-already concealed a failing assertion for an unknown period, and a bare run reports the
-count without the cause.
-
-The calibration fixture carries its own committed model and verifies it by SHA-256, so a
-recalibration elsewhere on the machine cannot invalidate it. If that digest ever fails to
-match, the error names both digests and refuses to continue rather than reporting a
-meaningless numeric drift.
+Tests needing a webcam are marked `hardware` and deselected by default, so the
+suite runs on a machine with no camera and no GPU.

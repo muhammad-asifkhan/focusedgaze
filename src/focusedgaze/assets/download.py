@@ -55,7 +55,14 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ..exceptions import ConfigError, ModelNotFoundError
-from .registry import ModelAsset, cache_dir, get_asset, model_dir_override, runtime_assets, sha256_file
+from .registry import (
+    ModelAsset,
+    cache_dir,
+    get_asset,
+    model_dir_override,
+    runtime_assets,
+    sha256_file,
+)
 
 __all__ = [
     "CHUNK_SIZE",
@@ -152,7 +159,7 @@ def urllib_transport(url: str, start_byte: int, timeout: float) -> RemoteStream:
     request = build_request(url, start_byte)
     # Scheme is checked in build_request, so urlopen cannot be steered at a
     # local file here.
-    response: Any = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310
+    response: Any = urllib.request.urlopen(request, timeout=timeout)
     status = int(response.status)
     return RemoteStream(
         status=status,
