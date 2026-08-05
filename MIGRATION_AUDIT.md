@@ -2441,6 +2441,81 @@ check exists in that file - it never imports the positioning gate. The documenta
 described an intention rather than the code, which is the same class of defect as section
 37.10's example that confirmed what it was built to confirm.
 
+---
+
+# Section 40 - Parallel implementation run, 2026-08-05, and what it left unproven
+
+Four phases were worked in parallel by separate agents on disjoint file sets, with git
+writes and the shared documents reserved centrally so concurrent work could not race on the
+index or on this file. Phase 7 completed (section 39). **Phases 3, 5 and 6 were terminated
+mid-run by a session limit.**
+
+## 40.1 State at the stop
+
+Suite: **194 passed, 2 deselected, zero skips.** Up from 19. `exceptions.py` landed first
+and centrally, because every other subsystem imports it and leaving it a stub would have
+serialised work that has no reason to be sequential.
+
+| Phase | Landed | Tests | Honest status |
+|---|---|---|---|
+| 3 config, types | yes | `test_config.py` | Defaults not yet checked against legacy source |
+| 5 calibration | yes | **none** | **Written and unproven** |
+| 6 assets | yes | 2 files, network-free | Closest to done |
+| 7 server | doc only | n/a | Contract established, decisions taken |
+
+## 40.2 The gap that matters: Phase 5 has no tests
+
+1653 lines of the **highest-risk numerical work in the migration**, with no dedicated test
+file, because the agent was killed before writing one. **None of the four mutation checks
+that Part D of the standing brief makes non-negotiable have been run**: transposed
+coefficients, wrong `PolynomialFeatures` term ordering, swapped x and y coefficient sets,
+and a degree mismatch.
+
+So the pure-NumPy `apply()` reproducing sklearn's term ordering is **unproven**. This is
+precisely the failure the brief warns about, and the reason it warns: a wrong polynomial
+does not crash. It returns a smooth, believable surface in the wrong place.
+
+**A green suite here means "nothing imports wrongly", not "the arithmetic matches."** The
+work was committed rather than discarded so it is not lost, with the gap stated in its
+commit message so it is visible in history rather than in someone's memory. Phase 5 is
+**written-and-unproven**, not nearly-done.
+
+## 40.3 A function shadowing a submodule, and why the tests could not have passed
+
+`assets/__init__.py` re-exports a function named `download` from the submodule
+`assets.download`. The function wins, so **both** obvious spellings bind the wrong object:
+
+    from focusedgaze.assets import download as m   -> the function
+    import focusedgaze.assets.download as m        -> also the function
+
+The second surprises people. `import a.b as x` resolves `getattr(a, "b")` first and only
+falls back to `sys.modules` when that lookup **fails**; here it succeeds and hands back a
+callable. Monkeypatching then raises an `AttributeError` naming a function, which reads like
+a missing symbol rather than a shadowing problem, and sends the reader looking in the wrong
+file.
+
+The tests now go through `sys.modules`, the one spelling that cannot be shadowed, with the
+reason recorded at the import so a later tidy-up does not "fix" it back.
+
+**The shadowing itself was left in place.** `download` is in the declared public `__all__`,
+so renaming it is an API decision rather than a test fix, and the API shape is on the list
+of things to ask about. Open item.
+
+The general point, which is section 39's lesson in another costume: **these two tests could
+never have passed as written.** They were committed unrun. Code that has not been executed
+has not been written yet, whoever or whatever produced it.
+
+## 40.4 On parallelising this work
+
+What worked: disjoint file ownership, one shared dependency resolved centrally up front, and
+reserving git and the shared documents so four writers could not collide.
+
+What it cost: three of four agents stopped mid-task, and partial work from an agent that
+cannot report its own gaps is worth less than it looks. Every landed file needed independent
+verification anyway, and two of the failures found were found by running the suite, not by
+reading the reports. **Treat an agent's completion claim as a hypothesis.** The suite is the
+evidence, and for Phase 5 the suite does not yet cover the thing most likely to be wrong.
+
 ## 38.5 The durable fix, partly applied
 
 **A virtualenv is not a durable artifact.** What saved the baseline was luck of layout, not

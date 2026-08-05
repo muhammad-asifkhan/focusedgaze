@@ -82,11 +82,11 @@ C:\Users\basim\Desktop\foucusedazed\
 | 0. Audit | **Done.** `MIGRATION_AUDIT.md` |
 | 1. Skeleton + golden harness | **Done.** Package installs, imports; Tier 1 fixtures recorded |
 | **2. Pure core** | **OPEN.** `filters.py` and `positioning.py` done and proven equivalent. `landmarks.py`, `model.py`, `estimator.py` remain |
-| 3. Config/types/exceptions | Not started (`mypy --strict` already passing on existing code) |
+| 3. Config/types/exceptions | **Landed, unreviewed.** `exceptions.py` done centrally. Config defaults not yet checked against legacy source |
 | 4. Capture layer | Not started |
-| 5. Calibration | Not started. **Highest-risk numerical work** |
-| 6. Assets + CLI | Not started |
-| 7. Server extra | Not started |
+| 5. Calibration | **Landed, UNPROVEN. No tests, no mutation checks.** See audit §40.2 |
+| 6. Assets + CLI | **Assets landed with tests. CLI not started** |
+| 7. Server extra | **Contract established, decisions taken** (§39). Code not started |
 | 8. Tests/docs | Not started |
 | 9. Packaging | Wheel-availability task **closed early** by CI; clean-venv install remains |
 | 10. Release | Not started |
@@ -297,11 +297,21 @@ Recorded in full in `MIGRATION_AUDIT.md` §21–31. The short version:
 
 ## 11. What to do next
 
-1. Confirm the SDK venv install finished; run the 19 tests from it.
-2. Record the Tier 2 fixture (lights on), replay it against the **unmodified** pipeline.
-3. Only then: `landmarks.py`, `model.py`, `estimator.py`, plus the test proving two
+Updated 2026-08-05. The suite is at **194 passed, 2 deselected, zero skips**.
+
+1. **Write the Phase 5 tests and run the four mutation checks.** Highest priority, ahead of
+   any new code. 1653 lines of the riskiest arithmetic in the project are currently
+   unproven, and a wrong polynomial will not announce itself. Audit §40.2.
+2. **Check the Phase 3 config defaults against the legacy source**, file:line by file:line.
+   The citations are in the code; nobody has confirmed them. A changed default is a
+   behaviour change wearing a refactor's clothes.
+3. Record the Tier 2 fixture (lights on), replay it against the **unmodified** pipeline.
+4. Only then: `landmarks.py`, `model.py`, `estimator.py`, plus the test proving two
    `GazeEstimator` instances in one process do not interfere.
-4. Close the Phase 2 gate.
+5. Close the Phase 2 gate.
+
+Decide separately: whether `download` should keep shadowing the `assets.download`
+submodule (§40.3), and Q7-2, whether the SDK sends explicit zero sequence counters.
 
 Before writing any code, read `STANDING_BRIEF.md` Part C: the ten standing rules are
 binding, and most of them exist because something broke.
