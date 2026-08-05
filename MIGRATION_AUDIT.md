@@ -2241,3 +2241,218 @@ steadiness once the filter can no longer keep up.
 is the same failure mode as a fixture that passes without having been shown to catch a bug:
 agreement with a prior belief is not evidence, whether the belief is about code or about a
 tradeoff. The example now states what its own numbers show.
+
+---
+
+# Section 38 - The environment loss of 2026-08-05
+
+## 38.1 Both virtualenvs were dead, including the frozen reference
+
+Found at the start of the session, before any work: **neither virtualenv could execute a
+single statement.** Two independent causes had combined.
+
+1. The entire tree had been moved to a new root. This is the **fourth** move; the path
+   record in `CONTEXT_HANDOFF.md` section 2 was stale in every entry.
+2. Separately, the base CPython 3.14 installation both venvs were built against had been
+   removed from the machine.
+
+Cause 2 is the one that killed them. A Windows venv keeps a *copy* of `python.exe`, which
+makes it look self-contained, but it still resolves its standard library through the `home`
+key in `pyvenv.cfg`. When that directory is gone the copied interpreter aborts before
+running any user code, and **the error names the missing base executable, saying nothing
+about virtualenvs at all.** Read quickly, it looks like a corrupt Python install rather than
+a broken venv.
+
+## 38.2 Why this was worse than a broken dev environment
+
+The SDK venv is disposable. The **legacy** venv is not: section 6 of the handoff records
+that its exact package set *is* the measurement the Tier 1 golden fixtures were recorded
+against. Every equivalence claim in this migration rests on being able to run it.
+
+The rule protecting it said **never install anything into it again**. That rule was
+honoured, and it did not help. It guarded against *modification* and was silent about the
+directory being *moved* and its base interpreter being *uninstalled*. Both happened.
+
+## 38.3 It survived because site-packages is self-contained
+
+Only the interpreter bootstrap was broken. `Lib\site-packages` was intact at 132 entries,
+with the frozen set present and matching what section 6 records: mediapipe 0.10.35, numpy
+2.5.1, onnxruntime-directml 1.24.4, scikit-learn 1.9.0, scipy 1.18.0, opencv 5.0.0.93,
+protobuf 7.35.1, websockets 16.1.1.
+
+So the fix was a **repair, not a rebuild**: `pyvenv.cfg` alone was rewritten to point at a
+3.14 interpreter that exists, with the original preserved beside it as
+`pyvenv.cfg.bak-before-repair`. **`site-packages` was not touched.** Verified by importing
+the full stack and confirming the DirectML execution provider still enumerates. A rebuild
+would have silently re-resolved every dependency to current versions and destroyed the
+baseline while appearing to succeed.
+
+## 38.4 The caveat this leaves open
+
+The interpreter now under the legacy venv is **3.14.3**. The venv was built on **3.14.4**,
+which is no longer on this machine. The frozen environment is running one CPython patch
+level below the one that recorded the fixtures.
+
+The compiled extensions are `cp314` and therefore ABI-compatible across 3.14.x, and a patch
+release is very unlikely to move floating-point results. But per rule 1, unlikely is not
+measured, and section 6 is explicit that the environment is part of the measurement.
+
+### Measured, not assumed: Tier 1 reproduces byte-for-byte
+
+Rather than leave this as a reasoned-about risk, it was tested. `record_tier1.py` was run
+**with the repaired legacy venv** and its output compared against the committed fixtures.
+
+The recorder writes to a path fixed relative to its own location and takes no output
+override, so running it in place would have **overwritten the committed baseline** - the
+exact trap section 33.4 rejected and section 37 fixed. It was therefore run against a copy
+of `tests/golden/` and `tests/fixtures/` in a scratch directory, leaving the real fixtures
+untouched.
+
+Result: **all four fixtures byte-for-byte identical.** `calibration_apply.json` (169
+cases), `one_euro.json` (124 cases), `positioning_gate.json` (16 cases) and
+`positioning_gate_nofocal.json` (16 cases), across both focal branches.
+
+So for every pure-numeric path the golden harness covers, the patch-level interpreter
+difference changes nothing. **The caveat is closed for Tier 1.**
+
+### What this does NOT prove
+
+Two limits, stated because a green result is the easiest place to overclaim:
+
+1. **Tier 1 does not exercise the ONNX model.** The recorder prints a line naming the
+   DirectML provider, which proves the session builds, but the fixtures cover the
+   calibration polynomial, the One Euro filter and the positioning gate. Those are numpy
+   and scikit-learn. No inference output is pinned by Tier 1.
+2. **Tier 2 is still unrecorded**, and it covers exactly the parts most exposed to an
+   environment difference: MediaPipe landmarks and ONNX inference. The interpreter caveat
+   remains formally open there until Tier 2 exists and is replayed.
+
+The remedy, if Tier 2 ever disagrees, is unchanged: install 3.14.4 and repoint `home`.
+
+### A related finding: the test suite never runs the legacy venv
+
+Worth recording because it corrects a natural misreading. `tests/golden/adapters.py`
+inserts the legacy directory onto `sys.path` of the **current** interpreter. It does not
+invoke the legacy venv's `python.exe`. So a normal `pytest` run executes legacy *source*
+against the **SDK venv's** packages, never the frozen set.
+
+The frozen venv therefore matters for **recording** fixtures, not for replaying them. That
+narrows what the freeze rule is protecting, and it means a green suite says nothing about
+the health of the legacy environment. This is also why the byte-for-byte check above had to
+be run explicitly with the legacy interpreter: the suite passing would not have told us.
+
+It also compounds the section 32 warning that the two venvs run different mediapipe and
+different ONNX providers. Any legacy-versus-SDK comparison run through the suite is holding
+the packages constant and varying only the source, which is the right experiment for a
+refactor but is not a check on the environment.
+
+---
+
+# Section 39 - Phase 7 reconnaissance: the exit criterion was not satisfiable
+
+Full contract in `docs/wire_format.md`. This section records the finding and the decisions.
+
+## 39.1 The game never reads the gaze message
+
+The Phase 7 exit criterion was "the existing browser game connects to `focusedgaze serve`
+and plays end to end, unmodified". **That criterion could not be met by a gaze-only server**,
+and the reason had been sitting in the client the whole time.
+
+There is exactly one WebSocket client in the game, `input-manager.js`. Its handler returns
+early on any message that is not `type: "input"`. The `type: "gaze"` message the SDK was
+being designed around is **discarded by the game**, with a source comment saying so
+outright: the gaze feed is kept for `gaze_test.html`, and the game consumes the resolved
+`input` message instead.
+
+The failure mode this would have produced is the expensive kind. A gaze-only server would
+have left the game connecting successfully, reporting itself connected, and never moving
+the cursor, **with no console error and nothing in the server log**. It would have looked
+like a calibration or tracking problem, not a wire-format problem.
+
+**Verified independently rather than taken on report.** A repository-wide search for
+WebSocket clients returns three files; two are comments, and one of those states explicitly
+that the socket lives in `input-manager.js`, "the only WebSocket client". The early return
+was read directly in the source.
+
+The general lesson, which is a variant of rule 2: **a wire format is defined by what the
+consumer reads, not by what the producer sends.** Every earlier description of this
+interface in the briefing documents described the producer. The one fact that determined
+the design was on the consumer side, and nobody had looked.
+
+## 39.2 Decisions taken
+
+Recorded here because Q6, the question this supersedes, had been posed in at least two
+documents and **answered in none** - grepping the audit found only the places asking it.
+That is precisely the gap rule 9 exists to close, so these do not repeat it.
+
+**Q7-1: the SDK emits a minimal gaze-only `input` message, plus hooks.** `type`, `mode`,
+`source`, `ok`, `x`, `y`, `t`, with `mode` and `source` the constant `"gaze"`. **No gesture
+fields.** The game repo's wrapper replaces the message through a `resolve_input` hook to add
+gesture. So bare `focusedgaze serve` drives the game, while the SDK's wire format stays
+gaze-only and no gesture-shaped field name enters it.
+
+The hook must **replace** the SDK's message rather than append to it, or two `input`
+messages race on every tick.
+
+**This rests on an inference that has not been executed.** With the gesture fields absent
+the client's counter sync compares `undefined > undefined`, which is `false` in JavaScript,
+so no click fires spuriously, and dwell-to-click remains enabled because `api.mode` stays
+`"gaze"`. Reading the client line by line says the game is fully playable. **Running it does
+not exist yet.** Confirm against a stub server before relying on it, and treat the
+sequence-counter behaviour as the specific thing to watch. Q7-2, whether to send explicit
+zeros for those counters instead of relying on `undefined`, stays open and is contingent on
+that test.
+
+**Q7-5: `gaze_test.html` stays a supported consumer**, so the `type: "gaze"` message remains
+in the SDK's wire format as the raw device feed. It is the only thing that makes bare
+`focusedgaze serve` testable without the game, which is worth keeping for `focusedgaze
+check` and for SDK users who are not this game.
+
+## 39.3 The frame-sharing coupling is already gone
+
+`read_shared_frame()` is defined and never called: `set_mode` passes `own_camera=True`, so
+the shared-frame tracker is never constructed. The gaze and gesture pipelines do **not**
+share frames in the live path. The only surviving coupling is a two-event camera lease.
+
+This matters because the camera lease is neither a gaze concept nor a gesture concept, it
+is an operating-system fact about a device that admits one owner. It belongs in the SDK as
+`pause()`/`resume()`, carrying the measured 4.0 s wait and both 0.3 s driver sleeps, which
+are empirical and must not be tidied into round numbers.
+
+## 39.4 Two latent bugs found, neither fixed
+
+Found by reading, not by running. Both left in place under rule 4: move first, improve
+second, in separate commits.
+
+1. **A guaranteed `NameError` at shutdown.** `gaze_loop`'s `finally` releases a capture
+   handle that is never bound in that function. **Confirmed independently**: the function
+   begins at line 310, the release is at line 380, and the only two bindings of that name
+   in the file are at lines 136 and 239, both in other scopes. It has stayed invisible
+   because it only fires when the loop exits, on a daemon thread, during shutdown.
+2. **Valid JSON that is not an object crashes the connection handler.** The attribute lookup
+   is not guarded, and the resulting error is not caught by the inner handler, so the
+   connection closes.
+
+A third, milder issue: the input message is built from mode and gesture state read without
+holding the lock that guards it.
+
+Also worth recording: the server's docstring describes an out-of-zone case, and no zone
+check exists in that file - it never imports the positioning gate. The documentation
+described an intention rather than the code, which is the same class of defect as section
+37.10's example that confirmed what it was built to confirm.
+
+## 38.5 The durable fix, partly applied
+
+**A virtualenv is not a durable artifact.** What saved the baseline was luck of layout, not
+design: `site-packages` happened to be self-contained and happened to move with the tree.
+
+`tests/golden/legacy_environment.txt` now records the frozen set as committed data, with
+the base interpreter version and the 3.14.3/3.14.4 caveat in its header, so the environment
+can be **reconstructed** rather than merely repaired. That is the half that is done.
+
+The half that is not: nothing verifies the live venv still matches that file. A drift check
+comparing `pip freeze` against the committed capture would turn a silent baseline change
+into a failing test, which is the same principle as pinning the calibration fixture's input
+in section 37. Until that exists, the golden baseline is still one directory deletion away
+from being unreproducible, and the recorded package list is the only thing standing behind
+it.

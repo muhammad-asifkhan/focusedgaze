@@ -1,0 +1,71 @@
+﻿# The frozen legacy reference environment, captured as data.
+#
+# This is the package set the Tier 1 golden fixtures were recorded against. Section 6 of
+# CONTEXT_HANDOFF.md explains why that matters: the reference implementation is data, not
+# just code, and its environment is part of the measurement.
+#
+# Captured 2026-08-05, after the venv was repaired following the environment loss recorded
+# in CONTEXT_HANDOFF.md section 12. site-packages was never modified, so this is the set
+# that recorded the fixtures.
+#
+# Base interpreter AT CAPTURE TIME: 3.14.3
+# Base interpreter that ORIGINALLY BUILT the venv: 3.14.4 (no longer on the machine)
+# That one patch level of difference is an open caveat, not a closed item.
+#
+# This file exists so the environment can be RECONSTRUCTED rather than merely repaired.
+# Do not regenerate it from a different venv.
+absl-py==2.5.0
+certifi==2026.6.17
+cffi==2.1.0
+contourpy==1.3.3
+cycler==0.12.1
+face-detection @ git+https://github.com/elliottzheng/face-detection@786fbab7095623c348e251f1f0a8b323721c6a84
+filelock==3.29.0
+flatbuffers==25.12.19
+fonttools==4.63.0
+fsspec==2026.4.0
+Jinja2==3.1.6
+joblib==1.5.3
+kiwisolver==1.5.0
+l2cs @ git+https://github.com/edavalosanaya/L2CS-Net.git@4a0f978d5b4c426a7d37022d8c927d6ea031dcb6
+MarkupSafe==3.0.3
+matplotlib==3.11.0
+mediapipe==0.10.35
+ml_dtypes==0.5.4
+MouseInfo==0.1.3
+mpmath==1.3.0
+narwhals==2.24.0
+networkx==3.6.1
+numpy==2.5.1
+onnx==1.22.0
+onnx-ir==0.2.1
+onnxruntime-directml==1.24.4
+onnxscript==0.7.1
+opencv-contrib-python==5.0.0.93
+opencv-python==5.0.0.93
+packaging==26.2
+pandas==3.0.3
+pillow==12.3.0
+protobuf==7.35.1
+PyAutoGUI==0.9.54
+pycparser==3.0
+PyGetWindow==0.0.9
+PyMsgBox==2.0.1
+pyparsing==3.3.2
+pyperclip==1.11.0
+PyRect==0.2.0
+PyScreeze==1.0.1
+python-dateutil==2.9.0.post0
+pytweening==1.2.0
+scikit-learn==1.9.0
+scipy==1.18.0
+setuptools==78.1.0
+six==1.17.0
+sounddevice==0.5.5
+sympy==1.14.0
+threadpoolctl==3.6.0
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+typing_extensions==4.15.0
+tzdata==2026.3
+websockets==16.1.1

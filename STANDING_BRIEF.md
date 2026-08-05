@@ -178,9 +178,31 @@ sets, and a degree mismatch. Plus the `.pkl` migration path.
 Registry, cache download with SHA-256 verification, and the split policy: MediaPipe landmarker
 auto-downloads; the gaze weights print instructions and stop. All six CLI commands.
 
-### Phase 7 — server extra
+### Phase 7 - server extra
 Gaze-only WebSocket server, wire format byte-identical. The game's gesture handling stays in
 the game repo as a thin wrapper.
+
+**Revised 2026-08-05 after reconnaissance (audit §39, contract in `docs/wire_format.md`).**
+The exit criterion as originally written was **not satisfiable**: the game reads only
+`type:"input"` and discards `type:"gaze"`, so a strictly gaze-only server leaves it
+connected and motionless with no error anywhere. Decided:
+
+- The SDK emits a **minimal gaze-only `input` message**: `type`, `mode`, `source`, `ok`,
+  `x`, `y`, `t`, with `mode` and `source` the constant `"gaze"`. **No gesture fields.**
+- The wrapper's `resolve_input` hook **replaces** that message rather than appending, or two
+  `input` messages race every tick.
+- `type:"gaze"` **stays** in the wire format; `gaze_test.html` remains supported and is what
+  makes bare `focusedgaze serve` testable without the game.
+- Preserve the two pacing rules: `input` every tick, `gaze` only when the reading changes.
+- The camera lease moves into the SDK as `pause()`/`resume()`, carrying the measured 4.0 s
+  wait and both 0.3 s driver sleeps. **Those are empirical; do not round them.**
+- Delete the `os.chdir()`; do not delegate it. Four cwd-relative lookups ride on it.
+- Two latent bugs are recorded in §39.4 and deliberately **not** fixed during extraction.
+  Fix them after, in their own commits, per rule 4.
+
+**Still unproven:** that the game plays against the minimal message. It is inferred from
+reading the client, not executed. Confirm against a stub server before relying on it, and
+watch the sequence counters specifically (Q7-2 is contingent on that result).
 
 ### Phase 8 — tests, docs, examples
 ≥80% coverage on non-hardware paths. **Before deleting any milestone script, run
