@@ -136,8 +136,11 @@ def polynomial_powers(degree: int, n_inputs: int = _N_INPUTS) -> NDArray[np.int6
     sklearn builds its terms from ``combinations_with_replacement`` over the
     input indices, for total degrees 0, 1, ... degree in that order. This
     function does the same thing, which is why the orders agree; it is not a
-    transcription of an observed sequence. ``test_calibration_profile.py``
-    asserts the equality against the real sklearn for degrees 1 to 8.
+    transcription of an observed sequence.
+    ``tests/test_calibration_profile.py`` asserts the equality against a real
+    scikit-learn for degrees 1 to 8, and skips when scikit-learn is absent,
+    which is every base install. So the claim is checked wherever the
+    ``calibration`` extra is present, including CI, and unchecked elsewhere.
 
     Args:
         degree: Highest total degree. Must be >= 1.
