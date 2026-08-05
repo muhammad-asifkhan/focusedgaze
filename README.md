@@ -3,11 +3,22 @@
 Webcam eye-gaze tracking as a Python library. Point a laptop camera at a face and get a
 screen coordinate.
 
-> **Status: in development (0.0.0).** Two modules are implemented and tested: the One Euro
-> filter and the positioning gate. The gaze pipeline itself is not. The API shown below is
-> the agreed contract, not working code, and every block that describes it is marked. Do
+> **Status: in development (0.0.0).** Implemented and tested: configuration, result types,
+> the exception tree, the One Euro filter, the positioning gate, and the model registry and
+> downloader. Implemented but **numerically unverified**: calibration. **Not yet written**:
+> the gaze pipeline itself, the capture layer, the CLI and the server. The API shown below
+> is the agreed contract, not working code, and every block that describes it is marked. Do
 > not depend on this release. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has
 > actually landed.
+
+### Documentation
+
+| Start here | For |
+|---|---|
+| [docs/what-you-need.md](docs/what-you-need.md) | **What you must supply and what you get back.** The short version. |
+| [docs/complete-usage.md](docs/complete-usage.md) | The full guide to the finished product, every section status-marked. |
+| [docs/usage.md](docs/usage.md) | What runs **today**, with examples that were executed. |
+| [docs/wire_format.md](docs/wire_format.md) | The WebSocket contract, read off the source. |
 
 ---
 
