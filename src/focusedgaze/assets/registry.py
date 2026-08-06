@@ -93,6 +93,22 @@ CACHE_APP_NAME = "focusedgaze"
 
 _HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 
+#: Characters that stop a filename being a single name SOMEWHERE.
+#:
+#: Deliberately not expressed through ``pathlib``. ``Path`` is ``WindowsPath``
+#: on Windows and ``PosixPath`` on Linux, and the two disagree about what these
+#: characters mean, so a check written as ``Path(f).name != f`` gives different
+#: answers on different machines. This registry is ONE source read on every
+#: platform and its filenames are joined onto a cache directory, so an entry
+#: must not mean two things depending on who reads it.
+#:
+#: * ``\\`` is a separator on Windows and an ordinary character on POSIX.
+#: * ``:`` makes a name drive-relative on Windows, where joining ``C:x`` onto a
+#:   cache directory on another drive escapes it completely, and also opens an
+#:   NTFS alternate data stream. On POSIX it is ordinary.
+#: * ``/`` is a separator everywhere and was already rejected.
+_NOT_A_BARE_NAME = re.compile(r"[/\\:]")
+
 # 1 MiB. Large enough that hashing 91 MB takes a couple of hundred
 # milliseconds, small enough that the file never has to fit in memory.
 _HASH_CHUNK = 1 << 20
@@ -104,8 +120,10 @@ class ModelAsset:
 
     Args:
         name: Logical key used by the API and the CLI, e.g. ``"face_landmarker"``.
-        filename: Name on disk. Must be a bare filename: a value containing a
-            path separator could escape the cache directory.
+        filename: Name on disk. Must be a bare filename, judged identically on
+            every platform: it is joined onto the cache directory, so anything
+            that is a separator, a drive prefix or a traversal *anywhere* is
+            rejected *everywhere*. See :data:`_NOT_A_BARE_NAME`.
         licence: Short licence note, for display.
         licence_url: Where that licence is stated.
         auto_download: Whether this package may fetch the file unprompted.
@@ -146,7 +164,7 @@ class ModelAsset:
     def __post_init__(self) -> None:
         if not self.name or not self.filename:
             raise ConfigError("a model asset needs both a name and a filename")
-        if Path(self.filename).name != self.filename:
+        if self.filename in (".", "..") or _NOT_A_BARE_NAME.search(self.filename):
             raise ConfigError(
                 f"{self.name}: filename {self.filename!r} must be a bare name, "
                 "not a path: it is joined onto the cache directory"

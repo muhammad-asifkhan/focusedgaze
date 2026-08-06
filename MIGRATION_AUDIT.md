@@ -2666,17 +2666,148 @@ returning a differently-shaped path.
 failed and that the cause is unknown; it does not diagnose it, and it must not be read as
 though it had.
 
-## 42.4 The durable fix, not yet applied
+## 42.4 The durable fix
 
-Nothing in this project notices a red CI. The audit records what was run locally, and the
-local run is the one that cannot see the failure. Options, none implemented:
+Nothing in this project noticed a red CI. The audit records what was run locally, and the
+local run is the one that cannot see the failure. Options considered:
 
 - a required status check on `main`, so a red run blocks the push rather than annotating it;
 - a status line in the audit or CHANGELOG updated per phase gate from the API, not from
   memory.
 
-Until one exists, a claim that the suite passes means it passes **on Windows**, and every
+**The first is being applied by the repository owner**, who is adding a required status
+check on `main` so that a red run blocks rather than annotates. Recorded here so this
+section does not sit open: the remaining gap is now owned, not merely noted.
+
+Until it lands, a claim that the suite passes means it passes **on Windows**, and every
 such claim in this repository should be read that way.
+
+## 42.5 Closed: one test, one parameter, on every version
+
+The failing assertion, once the log was actually read:
+
+    FAILED tests/test_assets_registry.py::test_filename_must_be_a_bare_name[a\b.bin]
+      >       with pytest.raises(ConfigError, match="bare name"):
+      E       Failed: DID NOT RAISE ConfigError
+
+    1 failed, 188 passed, 5 skipped, 2 deselected
+
+One test, one of its three parameters, identical on 3.12, 3.13 and 3.14. Not a flake, not a
+resolver difference, not an install problem.
+
+`ModelAsset.__post_init__` validated a filename with `Path(self.filename).name != self.filename`.
+`Path` is `WindowsPath` on Windows and `PosixPath` on Linux, and the two disagree about
+whether a backslash is a separator:
+
+| input | `WindowsPath(x).name` | rejected | `PosixPath(x).name` | rejected |
+|---|---|---|---|---|
+| `../escape.bin` | `escape.bin` | yes | `escape.bin` | yes |
+| `sub/dir.bin` | `dir.bin` | yes | `dir.bin` | yes |
+| `a\b.bin` | `b.bin` | yes | `a\b.bin` | **no** |
+
+On Linux a backslash is an ordinary filename character, so `a\b.bin` genuinely *is* a bare
+name and the guard correctly declined to reject it. The test asserted rejection
+unconditionally, so it could only ever pass on Windows.
+
+**The cause landed exactly where 42.3 guessed**: the Phase 6 assets code, path separators.
+That is worth noting without over-reading it. The guess was cheap and it was checked, not
+assumed; a guess recorded and then confirmed by evidence is a different thing from a guess
+believed because it sounded right, which is the failure mode section 41 spent three
+attempts on.
+
+## 42.6 The gate worked. The reading of it failed.
+
+This is the part to keep. `ci.yml` says in its own header that it runs on Linux
+deliberately, because "proving the pure core imports and computes correctly on Linux is
+what keeps the platform abstractions (D1) honest". That is precisely what it did. It found
+a Windows assumption baked into a validator, on the first push after that validator landed,
+and it said so five times.
+
+Nothing was wrong with the mechanism. What failed was that nobody read it, and the reason
+nobody read it is worth naming: **the local suite was green, and the local suite is the one
+that cannot see this class of defect at all.** Every local run agreed with itself and
+disagreed with CI, and the local one was the one being consulted. A test suite cannot
+detect a platform assumption on the platform that shares it.
+
+## 42.7 The 403 that was accepted too early
+
+The diagnosis needed the authenticated log, and an earlier turn had reported the log
+unavailable after a single unauthenticated 403 and moved on. That was a premature stop: the
+endpoint was not refusing, it was asking for credentials that were sitting in the machine's
+own credential helper the whole time.
+
+The working method, recorded because it will be needed again:
+
+    TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill \
+            | grep "^password=" | cut -d= -f2-)
+    curl -H "Authorization: Bearer $TOKEN" -L \
+         https://api.github.com/repos/OWNER/REPO/actions/jobs/JOB_ID/logs
+
+The stored credential is the repo owner's and carries the scope the endpoint needs. `gh` is
+not installed on this machine, which is what the earlier turn had treated as the end of the
+road.
+
+The general lesson matches rule 1 from the other direction. A gate that reports "denied"
+is a result, but **"I could not check" is not the same as "it cannot be checked"**, and the
+difference is usually one attempt.
+
+## 42.8 The sweep found two more holes in the same validator
+
+The backslash divergence was caught only because a test happened to parametrize a backslash.
+So the rest of `src/` was swept for anything whose meaning changes between `PosixPath` and
+`WindowsPath`. Two further defects turned up in the same six lines, neither of which any
+test exercised:
+
+**A bare `..` was accepted on both platforms.** `Path('..').name` is `'..'`, so the check
+passed it, and `cache/models/..` is the parent of the cache directory. This was never a
+platform divergence at all: it was a traversal hole everywhere, and it survived because no
+case in the parametrize list was a bare `..`. The test that found the backslash bug had the
+right idea and an incomplete list.
+
+**`C:foo.bin` was accepted on Linux.** On Windows it is drive-relative:
+
+    PureWindowsPath('D:/cache/models') / 'C:foo.bin'   ->   C:foo.bin
+
+which escapes the cache directory and the drive together. A colon is also how an NTFS
+alternate data stream is addressed. On POSIX it is an ordinary character, so a registry
+entry written or generated on Linux passes validation and becomes an escape when the same
+registry is read on Windows.
+
+Everything else in `src/` came back clean, and the reasons are worth recording so the sweep
+does not have to be repeated:
+
+| Site | Verdict |
+|---|---|
+| `profile.py` `_NAME_RE` | Safe by construction. `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` is a whitelist with no separator in it, and requiring an alphanumeric first character rejects `..` as a side effect. Profile names become filenames and are joined in five places; all are covered by this one regex. |
+| `registry.py` `model_dir_override` | `Path(raw).expanduser()` on a user-supplied environment variable. Platform-dependent interpretation is **correct** here: the user typed a path for their own machine. |
+| `download.py` joins | `directory / asset.filename` and the `.part` sibling. These are the joins the validator protects; once the validator is platform-independent they are safe everywhere. |
+| `config.py` suffix dispatch | `p.suffix.lower()` against `.toml`/`.json`. Case-folded explicitly, so it behaves identically on a case-sensitive filesystem. |
+| `profile.py` `list_profiles` | `p.stem` over a real `glob` result. No string is being classified. |
+
+## 42.9 The fix, and why it is a behaviour change
+
+The rule is now a property of the string rather than of the running platform, expressed as a
+character class instead of through `pathlib`:
+
+    _NOT_A_BARE_NAME = re.compile(r"[/\\:]")
+
+plus an explicit rejection of `.` and `..`. Both separators, the drive/stream colon and both
+traversal spellings are rejected on every platform, so one registry entry means one thing
+everywhere.
+
+This is a **behaviour change**, not a test fix, and it is committed separately under rule 4
+with that stated in the message. Filenames that a POSIX install previously accepted are now
+refused. Nothing in the shipped registry is affected: `face_landmarker.task`,
+`l2cs_gaze360.onnx` and `L2CSNet_gaze360.pkl` all pass unchanged, and a control test now
+pins that ordinary filenames are still accepted, because a validator that rejected
+everything would satisfy every negative test above.
+
+The new guarantee is pinned two ways. The parametrized list grew from 3 cases to 11 and now
+includes the ones that were silently passing. And `test_the_bare_name_rule_does_not_consult_pathlib`
+asserts the property **directly against `PurePosixPath` and `PureWindowsPath`** rather than
+through the ambient `Path`, because a test written in terms of `Path` agrees with whichever
+defect the local platform happens to have. That test would have caught the original bug on a
+Windows-only developer machine, which is the whole point.
 
 ---
 

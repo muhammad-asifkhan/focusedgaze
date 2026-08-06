@@ -57,6 +57,18 @@ this file records what changed, per phase.
 - `.gitattributes`, line endings normalised to LF in the repository.
 
 ### Changed
+- **Behaviour change, deliberate:** `ModelAsset` now judges a filename by the
+  same rule on every platform. It was `Path(filename).name != filename`, and
+  `Path` means `WindowsPath` on Windows and `PosixPath` on Linux, so one
+  registry entry meant two different things depending on who read it: `a\b.bin`
+  was rejected on Windows and accepted on Linux. That divergence is what turned
+  CI red for five pushes. Both separators, a drive-letter or NTFS-stream colon,
+  and both spellings of `..` are now rejected everywhere. The sweep that
+  followed found two further holes in the same check, neither previously
+  exercised by any test: a bare `..` was accepted on **both** platforms, and
+  `C:foo.bin` was accepted on Linux while escaping to another drive when joined
+  on Windows. No shipped registry entry is affected. `MIGRATION_AUDIT.md` §42.5
+  to §42.9.
 - **Behaviour change, deliberate:** the positioning gate no longer reads its
   focal length from a relative path at construction. It is now an explicit
   `FocalCalibration` argument. The legacy behaviour meant identical landmarks
@@ -103,9 +115,10 @@ this file records what changed, per phase.
   on all three Python versions on every push since, starting with `5df7ac1`,
   which is where the Phase 3/5/6 batch landed. `Lint`, `Type-check` and the
   bare-import check are still green on Linux; the failure is confined to the
-  suite. The failing assertion has not been identified: the Actions log needs
-  authentication to retrieve, and the failure does not reproduce on Windows.
-  See `MIGRATION_AUDIT.md` §42.
+  suite. **Diagnosed and fixed:** a single parametrized case,
+  `test_filename_must_be_a_bare_name[a\b.bin]`, failing on a platform assumption
+  in the asset registry's filename validator. See the behaviour-change entry
+  above and `MIGRATION_AUDIT.md` §42.
 - Coverage baseline **94%** across the two extracted modules (`filters.py`,
   `positioning.py`); 87% reported overall, inflated by empty stub modules and
   deflated by an untested CLI banner. Now **78%** overall across a much larger

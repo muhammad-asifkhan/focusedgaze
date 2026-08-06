@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import pathlib
+from pathlib import PurePosixPath, PureWindowsPath
 
 import platformdirs
 import pytest
@@ -160,11 +161,74 @@ def test_the_pytorch_checkpoint_is_not_a_runtime_asset() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["../escape.bin", "sub/dir.bin", "a\\b.bin"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../escape.bin",       # traversal, a separator on every platform
+        "sub/dir.bin",         # forward slash, a separator on every platform
+        "a\\b.bin",            # backslash: separator on Windows, inert on POSIX
+        "..\\escape.bin",      # traversal spelled the Windows way
+        "..",                  # bare traversal, accepted by pathlib on BOTH platforms
+        ".",                   # the cache directory itself
+        "C:foo.bin",           # drive-relative on Windows, inert on POSIX
+        "C:/foo.bin",          # absolute on Windows
+        "/abs.bin",            # absolute on POSIX
+        "trailing/",           # a directory, not a file
+        "stream.bin:ads",      # NTFS alternate data stream
+    ],
+)
 def test_filename_must_be_a_bare_name(bad: str) -> None:
-    """The filename is joined onto a cache directory, so it must not escape it."""
+    """The filename is joined onto a cache directory, so it must not escape it.
+
+    Every case here is rejected on EVERY platform, which is the guarantee that
+    matters and the one this did not previously make. The registry is a single
+    source read on Windows, Linux and macOS alike, and its filenames are joined
+    onto a cache directory, so an entry that is a bare name for one reader and a
+    path for another means two different things from one line of source.
+
+    The original check was ``Path(filename).name != filename``, and `Path` is
+    `WindowsPath` here and `PosixPath` there. It therefore accepted ``a\\b.bin``
+    on Linux and rejected it on Windows, which is what turned CI red for five
+    pushes (audit section 42), and it accepted ``C:foo.bin`` on Linux while that
+    value escapes to another drive entirely when joined on Windows.
+
+    It also accepted a bare ``..`` on *both* platforms, because ``Path('..').name``
+    is ``'..'``. That one was never a divergence: it was a traversal hole
+    everywhere, and it survived because no case in this list exercised it.
+    """
     with pytest.raises(ConfigError, match="bare name"):
         ModelAsset(**_minimal(filename=bad))  # type: ignore[arg-type]
+
+
+def test_the_bare_name_rule_does_not_consult_pathlib() -> None:
+    """The rule must be a property of the string, not of the running platform.
+
+    Asserted directly against `PurePosixPath` and `PureWindowsPath` rather than
+    through the ambient `Path`, because a test that used `Path` would agree with
+    whichever defect the platform happens to have. This is the check that would
+    have caught the original bug on a Windows-only developer machine.
+    """
+    # Only values some pathlib calls "bare". `sub/dir.bin` and `.` are rejected
+    # by both, so they prove nothing here and live in the list above instead.
+    bare_to_some_pathlib = ["a\\b.bin", "C:foo.bin", ".."]
+    for bad in bare_to_some_pathlib:
+        posix_thinks_bare = PurePosixPath(bad).name == bad
+        windows_thinks_bare = PureWindowsPath(bad).name == bad
+        # At least one platform's pathlib is happy with each of these, which is
+        # exactly why the rule cannot be delegated to pathlib.
+        assert posix_thinks_bare or windows_thinks_bare, (
+            f"{bad!r} no longer demonstrates the divergence this test is about"
+        )
+        with pytest.raises(ConfigError, match="bare name"):
+            ModelAsset(**_minimal(filename=bad))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "good", ["face_landmarker.task", "l2cs_gaze360.onnx", "a.b.c.bin", "no-extension"]
+)
+def test_ordinary_filenames_are_still_accepted(good: str) -> None:
+    """The control. A validator that rejected everything would pass the tests above."""
+    assert ModelAsset(**_minimal(filename=good)).filename == good  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("bad", ["ABC" + "0" * 61, "0" * 63, "z" * 64, ""])
