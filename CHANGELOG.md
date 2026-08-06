@@ -115,10 +115,11 @@ this file records what changed, per phase.
   on all three Python versions on every push since, starting with `5df7ac1`,
   which is where the Phase 3/5/6 batch landed. `Lint`, `Type-check` and the
   bare-import check are still green on Linux; the failure is confined to the
-  suite. **Diagnosed and fixed:** a single parametrized case,
+  suite. **Diagnosed, fixed and verified green:** a single parametrized case,
   `test_filename_must_be_a_bare_name[a\b.bin]`, failing on a platform assumption
-  in the asset registry's filename validator. See the behaviour-change entry
-  above and `MIGRATION_AUDIT.md` §42.
+  in the asset registry's filename validator. CI now passes on 3.12, 3.13 and
+  3.14 — 214 passed, 5 skipped, 78% coverage, matching Windows exactly. See the
+  behaviour-change entry above and `MIGRATION_AUDIT.md` §42.
 - Coverage baseline **94%** across the two extracted modules (`filters.py`,
   `positioning.py`); 87% reported overall, inflated by empty stub modules and
   deflated by an untested CLI banner. Now **78%** overall across a much larger

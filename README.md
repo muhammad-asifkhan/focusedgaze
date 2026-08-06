@@ -10,9 +10,9 @@ screen coordinate.
 > code, and every block that describes it is marked. Do not depend on this release. See
 > [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has actually landed.
 >
-> **CI is currently red.** The test suite has failed on Linux on every push since
-> `5df7ac1`; lint, type-check and the bare-import check are still green. The cause is not
-> yet identified. See `MIGRATION_AUDIT.md` §42.
+> **CI is green** on Python 3.12, 3.13 and 3.14: 214 passed, 5 skipped. It was red for five
+> pushes on a platform assumption in the asset registry, since fixed. See
+> `MIGRATION_AUDIT.md` §42.
 
 ### Documentation
 

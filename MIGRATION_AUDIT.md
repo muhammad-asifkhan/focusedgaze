@@ -2809,6 +2809,29 @@ through the ambient `Path`, because a test written in terms of `Path` agrees wit
 defect the local platform happens to have. That test would have caught the original bug on a
 Windows-only developer machine, which is the whole point.
 
+## 42.10 Verified green
+
+Run `31075381626`, commit `ceb3ef0`, all three matrix jobs:
+
+| Job | Lint | Type-check | Bare import | Test |
+|---|---|---|---|---|
+| `test (3.12)` | success | success | success | **success** |
+| `test (3.13)` | success | success | success | **success** |
+| `test (3.14)` | success | success | success | **success** |
+
+    214 passed, 5 skipped, 2 deselected
+    TOTAL   1193 statements   260 missed   78%
+
+Six red runs, then green, with the difference being one character class. Coverage on Linux
+matches Windows exactly, which is the secondary thing this run confirms: the calibration
+work of section 43 was verified on Windows only until now, and it reproduces on a platform
+none of its fixtures were recorded on.
+
+The suite is 214 on Linux against 219 locally; the five are the Tier 1 golden tests and the
+landmarker check, which skip without `FOCUSEDGAZE_LEGACY_DIR` and are expected to.
+
+**Section 42 is closed**, with 42.4 owned by the repository owner and tracked there.
+
 ---
 
 # Section 43 - Phase 5 verified: the calibration polynomial has teeth
