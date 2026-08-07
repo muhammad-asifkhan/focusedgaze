@@ -138,6 +138,17 @@ drop matrix rows to force green.**
     The same reasoning forbids a *rule* that targets a marker a *check* searches for — the
     detector would scrub its own evidence. See `fg-replacements.README.md`.
 
+11. **Validate by whitelist, not by library behaviour.** Anything that becomes a filename, a
+    path component or a key is checked against an explicit character class of what is
+    allowed, never by asking a library whether it looks acceptable. `pathlib`'s answer
+    depends on the platform, so a check written through it inherits whichever defect the
+    local platform has.
+
+    The contrast is already in this repo: the profile name regex is a whitelist and was safe
+    by construction, including against traversal it was never written to consider. The
+    registry check delegated to `pathlib` and had three holes, only one of which any test
+    found. See MIGRATION_AUDIT.md section 42.
+
 ---
 
 ## Part D — Remaining work

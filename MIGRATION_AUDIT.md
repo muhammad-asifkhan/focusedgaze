@@ -2675,9 +2675,10 @@ local run is the one that cannot see the failure. Options considered:
 - a status line in the audit or CHANGELOG updated per phase gate from the API, not from
   memory.
 
-**The first is being applied by the repository owner**, who is adding a required status
-check on `main` so that a red run blocks rather than annotates. Recorded here so this
-section does not sit open: the remaining gap is now owned, not merely noted.
+**The first is pending on the repository owner**, who is adding a required status check on
+`main` so that a red run blocks the push rather than annotating it. This item is therefore
+**tracked, not open**: it has an owner and a decided approach, and it is not waiting on
+anyone else or on a further decision.
 
 Until it lands, a claim that the suite passes means it passes **on Windows**, and every
 such claim in this repository should be read that way.
@@ -2831,6 +2832,46 @@ The suite is 214 on Linux against 219 locally; the five are the Tier 1 golden te
 landmarker check, which skip without `FOCUSEDGAZE_LEGACY_DIR` and are expected to.
 
 **Section 42 is closed**, with 42.4 owned by the repository owner and tracked there.
+
+## 42.11 The generalisation: standing rule 11
+
+This episode produced a new standing rule, added to Part C of `STANDING_BRIEF.md`:
+
+> **Validate by whitelist, not by library behaviour.** Anything that becomes a filename, a
+> path component or a key is checked against an explicit character class of what is
+> allowed, never by asking a library whether it looks acceptable. `pathlib`'s answer
+> depends on the platform, so a check written through it inherits whichever defect the
+> local platform has.
+
+The evidence for it is a controlled comparison that already existed in this repository,
+which is why it is worth stating as a rule rather than as a note on one bug. Two validators,
+same job, written differently:
+
+| | `profile.py` `_NAME_RE` | `registry.py` filename check |
+|---|---|---|
+| Approach | whitelist: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` | ask `pathlib` |
+| Backslash | rejected, not in the class | **platform-dependent** |
+| Drive colon | rejected, not in the class | **accepted on POSIX** |
+| Bare `..` | rejected: first character must be alphanumeric | **accepted everywhere** |
+| Holes found | none | three |
+
+The whitelist was safe **against traversal it was never written to consider**. Nobody
+reasoned about `..` when writing `_NAME_RE`; requiring an alphanumeric first character
+excluded it for free. That is the property being generalised: a whitelist fails closed
+against inputs its author never imagined, and a delegated check fails open against exactly
+those inputs, because the library was answering a different question than the one being
+asked of it.
+
+**The distribution of how the three holes were found is the other half of the argument.**
+One was found by a failing test, and only because that test happened to parametrize a
+backslash. The other two were found by the sweep, by reading every path-handling site in
+`src/` and asking what changes between `PosixPath` and `WindowsPath`. Neither was reachable
+by any test in the suite, so no amount of running the tests would have surfaced them, and
+CI could not have gone red for either.
+
+That ratio, one from a test and two from looking, is the reason this is a rule about how
+validators are written rather than a reminder to add more cases. Cases only cover what
+somebody thought of. A character class covers the complement of what was allowed.
 
 ---
 
