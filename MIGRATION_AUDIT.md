@@ -3231,3 +3231,53 @@ Total **88%**, past the Phase 8 target of 80% and up from 78%.
 The uncovered remainder in `cli.py` is the `export-onnx` body past the dependency gate,
 which cannot run without `torch` and `l2cs` installed. `calibration/collector.py` at 48% is
 untouched by this work and remains the largest gap.
+
+---
+
+# Section 46 - Branching policy: the gate moves in front of `main`
+
+## 46.1 The change
+
+From this point, no direct commits to `main`. Work happens on `dev`, and `main` changes only
+through a `--no-ff` merge, after the full gate has passed on `dev` and been observed green in
+CI there. Recorded as standing rule 12 so it lives with the other rules rather than only in
+the instruction that created it.
+
+None of rules 1 to 11 change. What changes is **where** they are enforced: before code is
+visible to the team rather than after. That is the direct lesson of section 42, where five
+red runs sat on `main` because a red build annotated rather than blocked, and the only
+evidence anyone consulted was a local suite that could not see the defect.
+
+## 46.2 `ci.yml` had to change or the policy was unenforceable
+
+The workflow triggered on `push: branches: [main]` only. A push to `dev` therefore ran
+**nothing**, so the clause requiring CI green on `dev` before merging could not be satisfied
+by any means: the only evidence available would have been a local run, which is precisely
+the evidence section 42 established as insufficient.
+
+`dev` is now in the trigger list. Worth recording because it is the sort of gap that reads as
+a policy being followed while producing no evidence at all - a gate that cannot fail is not a
+gate, which is rule 1 in yet another costume.
+
+## 46.3 Nothing was moved off `main`, and that was deliberate
+
+The instruction said work in progress should move to `dev` if it is uncommitted or already on
+`main`. Phases 4 and 6 were already committed, pushed, and verified green in CI on `main`
+before the policy existed.
+
+Moving them would have meant rewriting published history to remove commits that are correct
+and independently verified, then re-adding them through a merge. That trades a real audit
+trail for a tidier-looking one, and this project has already spent three attempts and a full
+rollback learning what history rewriting costs (sections 21-26). The policy is effective from
+this point; `dev` was branched from `main` at `caf2dc0`, so it contains that work rather than
+needing it moved.
+
+The working tree was clean and `main` was level with `origin/main`, so there was nothing
+uncommitted to rescue either. Checked rather than assumed, per rule 6.
+
+## 46.4 This commit is the first use of the policy
+
+The branching change is itself gated by the procedure it introduces: committed on `dev`, all
+four checks run locally, CI observed green on `dev`, then merged `--no-ff` and CI confirmed
+green on `main` separately. A policy whose own introduction bypassed it would be worth
+nothing.

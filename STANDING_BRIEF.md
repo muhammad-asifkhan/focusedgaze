@@ -149,6 +149,42 @@ drop matrix rows to force green.**
     registry check delegated to `pathlib` and had three holes, only one of which any test
     found. See MIGRATION_AUDIT.md section 42.
 
+12. **No direct commits to `main`.** All work happens on `dev`. `main` changes only through
+    a merge, and only after the full gate has passed **on `dev`**.
+
+    This changes nothing about rules 1 to 11. It changes *where* they are enforced: before
+    code is visible to the team rather than after.
+
+    **The gate, before any merge:**
+
+    - `pytest -q -rs`, run **both** with and without `FOCUSEDGAZE_LEGACY_DIR` set. Never a
+      bare run: the skip reasons are part of the result, and a skip has concealed a failing
+      assertion here before.
+    - `ruff check src tests`
+    - `mypy --strict`
+    - Push `dev` and **observe CI green on `dev` itself**. Not inferred from a local run.
+      Section 42 is the whole reason this clause is written that way: the local suite was
+      green for five consecutive red CI runs, and a test suite cannot detect a
+      platform assumption on the platform that shares it.
+
+    **The merge:**
+
+    ```
+    git checkout main && git pull
+    git merge dev --no-ff
+    git push origin main
+    ```
+
+    `--no-ff` is required. A fast-forward folds `dev`'s history into `main` with no merge
+    commit, and rule 9 depends on being able to see what arrived together and when.
+
+    **After merging, confirm CI green on `main` separately.** A green `dev` does not
+    guarantee a green `main`: `main` may have moved, and the merge result is a commit that
+    has never been tested until it exists.
+
+    `ci.yml` therefore triggers on pushes to **both** branches. With `main` alone a push to
+    `dev` ran nothing and this gate could not be satisfied at all.
+
 ---
 
 ## Part D — Remaining work

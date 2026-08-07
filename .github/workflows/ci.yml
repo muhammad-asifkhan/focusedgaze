@@ -10,9 +10,14 @@
 
 name: ci
 
+# `dev` is here because the branching policy (STANDING_BRIEF Part C, rule 12)
+# requires CI to be observed green ON dev before a merge to main. With `main`
+# alone, a push to dev triggered nothing and the gate could not be satisfied:
+# the only evidence available would have been a local run, which is exactly the
+# evidence section 42 showed to be insufficient.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
