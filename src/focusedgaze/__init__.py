@@ -21,8 +21,11 @@ is implemented; what is missing is missing on purpose, because an ``__all__``
 entry that cannot be imported is worse than an honest omission.
 
     Implemented and tested   config, types, exceptions, filters, positioning,
-                             assets (via ``focusedgaze.assets``), calibration
-    Not yet implemented      GazeEstimator, WebcamGazeTracker. Phases 2 and 4.
+                             assets (via ``focusedgaze.assets``), calibration,
+                             capture (frame sources)
+    Not yet implemented      GazeEstimator (Phase 2), and WebcamGazeTracker,
+                             which composes an estimator with a frame source
+                             and therefore waits on it.
 
 Calibration was the migration's highest numerical risk, because a wrong
 polynomial does not raise: it returns a smooth, believable surface in the wrong
@@ -54,6 +57,13 @@ from .calibration import (
     list_profiles,
     migrate_pickle,
     robust_fit_samples,
+)
+from .capture import (
+    Frame,
+    FrameSequenceSource,
+    FrameSource,
+    VideoFileSource,
+    WebcamSource,
 )
 from .config import (
     CameraConfig,
@@ -92,6 +102,9 @@ __all__ = [
     "FaceObservation",
     "FilterConfig",
     "FitResult",
+    "Frame",
+    "FrameSequenceSource",
+    "FrameSource",
     "GazeConfig",
     "GazeError",
     "GazeResult",
@@ -104,6 +117,8 @@ __all__ = [
     "ProfileVersionError",
     "ProviderError",
     "RuntimeConfig",
+    "VideoFileSource",
+    "WebcamSource",
     "__version__",
     "fit_calibration",
     "list_profiles",
