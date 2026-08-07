@@ -2,6 +2,19 @@
 
 Organised by what you notice, not by what the code does.
 
+> **Start here: `focusedgaze check`.** Most of this page is environment problems that
+> produce a *working* system that is quietly worse than you expect, and none of them raise.
+> One command reports all of them with the remedy attached:
+>
+> ```bash
+> focusedgaze check              # add --no-camera on a headless machine
+> ```
+>
+> It checks the ONNX provider (including the silent CPU fallback), the model files and
+> their digests, whether a calibration exists and is selected, whether the camera opens,
+> and whether the room is lit. Exit code is 0 unless something is genuinely broken; a
+> warning means usable-but-worse.
+
 > **Status.** Most of these symptoms come from the original system, which is the working
 > implementation focusedgaze is being extracted from. They apply to focusedgaze as each
 > phase lands. Rows about commands that do not exist yet are marked.
@@ -58,7 +71,7 @@ blaming the tracker.
 | Tests pass but prove nothing | Comparison tests skipped | Run `pytest -q -rs` and read the skip reasons. A skip here has already concealed a failing assertion |
 | Comparison tests all skip | `FOCUSEDGAZE_LEGACY_DIR` unset | Point it at the original `gaze-detection` folder |
 | `ModuleNotFoundError: websockets` in a skip reason | Missing `server` extra | The original server imports it. Install `[server]` to run the full comparison |
-| The calibration golden test fails | Known harness defect, not a regression | The fixture loads its model from a path a recalibration overwrites. Audit section 33 |
+| The calibration golden test fails | A real numeric drift | The fixture now commits its own model and verifies it by digest, so a failure here is a change in behaviour rather than a moving input. Audit sections 37 and 43 |
 | Numbers drift for no reason | Environment moved under you | The reference implementation's environment is part of the measurement. See `requirements-dev.txt` |
 
 ## Things that are working as intended
@@ -67,7 +80,9 @@ Worth listing, because each one gets reported as a bug.
 
 **`download-models` refuses to fetch the gaze weights.** Deliberate. They derive from a
 dataset restricted to non-commercial research, so focusedgaze does not distribute, mirror or
-fetch them. It prints instructions and stops. *(Command arrives in Phase 6.)*
+fetch them. It prints instructions and stops, and **exits 0**: this is the licence policy
+working, not a failure, and a command that was permanently red on a correct installation
+would be one nobody reads.
 
 **Calibration will not run outside 45–65 cm.** The face crop scales with distance, so a
 model fitted at one distance and used at another is being asked about inputs it never saw.

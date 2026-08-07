@@ -74,7 +74,7 @@ included and the wheel stays under 5 MB.
 
 ## 3. First-run setup
 
-### 3.1 `focusedgaze download-models` **[PLANNED CLI, SHIPPED registry]**
+### 3.1 `focusedgaze download-models` **[SHIPPED]**
 
 ```bash
 focusedgaze download-models [--dir PATH] [--force]
@@ -100,41 +100,75 @@ unimplemented feature. See `NOTICE`.
 that already contains the files. It takes precedence over the cache and skips all
 network access.
 
-### 3.2 `focusedgaze calibrate` **[PLANNED]**
+### 3.2 `focusedgaze calibrate` **[SHIPPED]**, except interactive capture
+
+Profile management works now:
 
 ```bash
-focusedgaze calibrate [--profile NAME] [--camera INDEX]
+focusedgaze calibrate --list                              # * marks the active one
+focusedgaze calibrate --from-samples samples.json --name alice
+focusedgaze calibrate --migrate old_calibration.pkl --name alice
+focusedgaze calibrate --activate alice
+focusedgaze calibrate --delete alice
 ```
 
-**Inputs:** a person sitting in their normal position, following a moving dot.
-**Outputs:** a named calibration profile saved to the platform config directory,
-plus a printed held-out error.
+`--from-samples` takes a JSON list of `[pitch, yaw, target_x, target_y]` rows and
+runs the same robust fit the interactive flow will, printing the degree, the
+number of outliers dropped, and both the fit and held-out errors.
+
+`--migrate` converts a legacy pickled calibration into the JSON format. Keep the
+JSON: it loads without scikit-learn and does not execute code on load.
+
+**Interactive capture (following a moving dot) is [PLANNED].** It needs
+`GazeEstimator`, which is Phase 2. Running `focusedgaze calibrate` with no action
+says so and lists what does work rather than pretending.
+
+Calibration is **per person, per machine, and per seating position**. Move the
+laptop, change chairs, or swap users, and it needs redoing.
 
 Calibration is **per person, per machine, and per seating position**. It is the
 file the whole system depends on. Move the laptop, change chairs, or swap users,
 and it needs redoing.
 
-### 3.3 `focusedgaze check` **[PLANNED]**
+### 3.3 `focusedgaze check` **[SHIPPED]**
 
 ```bash
-focusedgaze check
+focusedgaze check                  # add --no-camera on a headless machine
+focusedgaze check --json           # machine-readable
 ```
 
-**Inputs:** none. **Outputs:** a diagnostic report and a non-zero exit if
-anything is unusable.
+**Inputs:** none. **Outputs:** one line per check, with a remedy under anything
+that is not `ok`. Exit code 0 unless something is genuinely broken; a warning
+means usable-but-worse and still exits 0.
+
+Real output, from a machine with no models installed:
 
 ```
-camera        OK    index 0, 1280x720 @ 30fps, MSMF
-providers     OK    DmlExecutionProvider (CPUExecutionProvider available)
-models        OK    face_landmarker.task, l2cs_gaze360.onnx
-profiles      OK    2 found, active: "arsalan-laptop"
-port 8765     FREE
+[ ok ] interpreter: focusedgaze 0.0.0 on Python 3.14.6 (win32)
+[ ok ] onnx-provider: accelerated provider available: DmlExecutionProvider
+[ ok ] model-dir: model directory: ...\focusedgaze\Cache\models (managed cache)
+[FAIL] model:face_landmarker: face_landmarker.task is missing
+       Run: focusedgaze download-models
+[warn] calibration: no calibration profile found
+       Gaze is per person and does not transfer. Without a profile you get raw
+       model output, not screen coordinates, which looks like a cursor that is
+       simply in the wrong place. Run: focusedgaze calibrate
+[ ok ] camera: camera delivering 1280x720 frames
+[ ok ] camera-brightness: lighting is adequate: mean 104.3/255
 ```
 
-This command matters more than it looks. Most real-world failures here are
-environment problems: a muted webcam, the CPU provider silently selected instead
-of the GPU, a missing calibration, a port already in use. One command that
-reports all of them turns a troubleshooting table into a tool.
+This command matters more than it looks. Almost every real-world failure here is
+an environment problem that produces a **working** system: a muted webcam (which
+still returns frames), a dark room, the CPU provider silently selected instead of
+the GPU, a missing calibration, or the unrefined 468-point landmark model, which
+tracks a face perfectly and reports distances wrong by a constant factor. None of
+them raise. One command that reports all of them turns a troubleshooting table
+into a tool.
+
+The brightness check waits for auto-exposure to settle before judging, comparing
+against a reading a full window earlier rather than the previous frame. A camera
+takes several seconds to open up, and a check that sampled immediately would
+report a dark room on a well-lit one.
 
 ### 3.4 `focusedgaze demo` **[PLANNED]**
 
@@ -486,8 +520,10 @@ Then ten lines of Python, as in section 4.
 | Asset registry and downloader | **[SHIPPED]** |
 | Calibration | **[SHIPPED]** |
 | `GazeEstimator`, landmarks, ONNX model | **[PLANNED]** |
-| Capture layer, `WebcamGazeTracker` | **[PLANNED]** |
-| CLI | **[PLANNED]** |
+| Capture layer (`WebcamSource`, video and sequence sources) | **[SHIPPED]** |
+| `WebcamGazeTracker` | **[PLANNED]**, needs the pipeline |
+| CLI: `download-models`, `check`, `calibrate`, `export-onnx` | **[SHIPPED]** |
+| CLI: `serve`, `demo` | **[PLANNED]** |
 | WebSocket server | **[PLANNED]**, contract fixed |
 
 For what runs today with executed examples, see [usage.md](usage.md). That

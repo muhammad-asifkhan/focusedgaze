@@ -3000,3 +3000,234 @@ cover. What is now covered is the arithmetic, which is the part that fails silen
 - `migrate_pickle` needs scikit-learn, because the legacy pickle holds live estimator
   objects. Inherent to the format and documented, but it means the migration path, unlike
   the apply path, is not available in a base install.
+
+---
+
+# Section 44 - Phase 4: capture, everything except the composition
+
+## 44.1 What landed, and what deliberately did not
+
+`capture/base.py`, `capture/webcam.py` and `capture/video.py` are implemented.
+`WebcamGazeTracker` is **not**, and its absence is the point: it composes a frame source
+with a `GazeEstimator`, so it is gated on Phase 2 and on the Tier 2 fixture. Writing it
+against a stub estimator would have produced code nobody could run and a test that asserted
+its own scaffolding.
+
+| Module | Lines | What it is |
+|---|---|---|
+| `base.py` | 175 | `Frame`, the `FrameSource` protocol, shared lifecycle |
+| `webcam.py` | 300 | threaded capture, per-platform backend selection |
+| `video.py` | 210 | `VideoFileSource`, `FrameSequenceSource` |
+
+49 tests, none of which need a camera or a codec.
+
+## 44.2 The threaded capture design, carried over rather than reinvented
+
+`gaze_server.py` ran `cap.read()` on a dedicated thread writing into a one-slot buffer, and
+its comment (L111-113) states the reason: decoupling capture from inference means the slow
+webcam read never stalls the GPU. That is preserved, including the consequence: **frames are
+dropped on purpose.** If inference is slower than the camera, intermediate frames are
+discarded rather than queued, because for live tracking a stale frame has no value.
+
+The property is pinned by a test that asserts the sequence number jumps, which is the only
+way "we dropped frames" is observable from outside. A queueing implementation was written
+and confirmed to fail it.
+
+## 44.3 One deliberate deviation from the legacy read loop
+
+The legacy loop read its shared slot freely and could infer on the same capture more than
+once. `WebcamSource.read()` instead waits for a frame **newer** than the last one it
+returned.
+
+Stated as a deviation under rule 4 because it is one. The justification: a repeated frame
+produces two results with identical content and different timestamps, which downstream is a
+zero-length movement over a non-zero interval. The One Euro filter's cutoff is
+velocity-dependent, so feeding it a synthetic zero velocity is not neutral.
+`docs/troubleshooting.md` already lists timestamp handling as a jitter cause. The legacy
+behaviour was harmless for a cursor because nothing downstream differentiated per frame;
+this package's does.
+
+## 44.4 Backend selection is tested from every platform, not on every platform
+
+`resolve_backend(name, platform)` takes the platform as an argument precisely so the table
+can be exercised for Windows, macOS and Linux from one machine. Section 42 is the reason
+that is not optional: a Windows-only assumption survived in a validator because nothing ever
+asked what the other platforms did, and it cost five red CI runs. Platform behaviour checked
+on one platform is not checked.
+
+Rule 11 applies and is followed: `_BACKENDS` is an explicit name-to-constant table and an
+unknown name raises. There is deliberately **no** fallback to `CAP_ANY`, because a wrong-but-
+working backend produces no error at all, only the "video is smooth, gaze lags" symptom.
+`MSMF` in uppercase is rejected too: accepting both spellings would put this table and
+`CameraConfig`'s own validation into disagreement.
+
+## 44.5 Two sources for CI, and why the in-memory one is the important one
+
+`VideoFileSource` decodes a file. `FrameSequenceSource` replays arrays already in memory and
+needs no codec, container or temporary file, which makes it the one that behaves identically
+everywhere. A codec present in one OpenCV wheel and absent from another is exactly the class
+of environment difference that produces a test passing only on the machine it was written
+on, which is section 42 in a different costume. It is also what the Tier 2 fixture will
+replay through, since that is stored as an `.npz` of frames with no encoder in the path.
+
+Both replay every frame in order and stamp timestamps from a stated frame rate rather than
+the clock, so replaying twice gives identical timings. Wall-clock stamps would make a golden
+comparison depend on how long decoding took.
+
+## 44.6 `config.mirror` is not applied at capture, deliberately
+
+The legacy server published unmirrored frames and flipped a local copy inside the gaze loop;
+`read_shared_frame` says so explicitly. Mirroring is a property of how a frame is
+interpreted, not of how it was captured, and a shared frame has consumers that disagree
+about handedness. Applying it here would silently double-flip for any consumer that also
+honours the setting. Recorded because "the mirror config is ignored" looks like an oversight
+to anyone who has not read this.
+
+## 44.7 Release ordering, and the empirical constants
+
+`release()` sets the stop flag, joins the capture thread, releases the device, then sleeps
+**0.3 s**. Strictly ordered: releasing the capture while the thread is inside a native
+`read()` is a use-after-free in the native layer. The 0.3 s is `gaze_server.py:159` verbatim
+("the driver needs a beat before it can be reopened") and the 4.0 s join timeout matches the
+legacy camera handover wait. Both are measured; neither is rounded.
+
+If the join times out the device is deliberately **not** released and a warning is logged,
+because the thread is blocked in a native call that has not returned and releasing under it
+is worse than leaking until process exit.
+
+## 44.8 Mutation-checked
+
+Four defects introduced, four caught:
+
+| Defect introduced | Caught by |
+|---|---|
+| `read()` returns the slot without waiting for a new frame | the no-repeats test |
+| `release()` does not join the capture thread | the thread-outlived-release test |
+| capture thread queues instead of holding only the newest | the frame-dropping test |
+| `__exit__` does not release | the context-manager test |
+
+## 44.9 One test was measuring the scheduler
+
+`test_size_reports_what_arrives_not_what_was_asked_for` originally asserted the requested
+resolution *before* any frame arrived. The capture thread starts in `__init__`, so against a
+working fake the first frame can land before the assertion runs; it failed on the first run
+for that reason. Split into two tests, one of which uses a camera that never delivers so the
+pre-frame state is deterministic. Recorded because a test whose outcome depends on thread
+timing is a flake that will be blamed on the code it is testing.
+
+---
+
+# Section 45 - Phase 6: the CLI, everything except serve and demo
+
+## 45.1 Four commands, and two absences
+
+`download-models`, `check`, `calibrate` and `export-onnx` are implemented. `serve` belongs
+to Phase 7 and `demo` needs a pipeline that does not exist, and **neither is registered as a
+subcommand**. A subcommand that parses and then apologises appears in `--help` as though it
+were a feature; a test asserts they are absent.
+
+34 CLI tests plus 26 for the checks. Every command is run.
+
+## 45.2 `check` is a module, not a function in `cli.py`
+
+`diagnostics.py` is a new module and that is a deviation from the file list in Part D worth
+naming. The reason: every check is a pure function of injected inputs (an environment
+mapping, a provider lister, a frame-source factory), which is the only way any of them get
+tested without a camera, a GPU or model files. Logic reachable only through
+`main(["check"])` would be tested by string-matching stdout. `cli.py` renders and picks an
+exit code; it diagnoses nothing.
+
+## 45.3 What `check` actually checks, and why each one earns its place
+
+Most of `docs/troubleshooting.md` is environment problems that produce a **working** system
+that is quietly worse than expected. None of them raise. That is what makes them expensive:
+the symptom is always "tracking is bad" and the cause is somewhere else.
+
+| Check | The failure it catches | Why nothing else catches it |
+|---|---|---|
+| `onnx-provider` | only CPU available | inference goes 15 ms -> 104 ms and keeps working; the user reports a tracking bug |
+| `model:face_landmarker` | digest mismatch | the unrefined 468-point model loads and tracks a face; only distances are wrong, by a consistent factor, because distance comes from the iris points |
+| `model:gaze_model` | missing | expected on first run; carries the licence instructions rather than "run download-models" |
+| `calibration` | none, or none active | the pipeline still emits coordinates, just raw model output, which reads as "the cursor is in the wrong place" |
+| `camera` | will not open | a crashed process can hold a webcam |
+| `camera-brightness` | dark room, or a muted camera | **a muted camera still returns frames**, so this looks like a tracking failure rather than a device problem |
+
+Every one is tested in both directions. A check that fires on everything is as useless as
+one that fires on nothing, so each has a control asserting the healthy state is not reported
+as a problem.
+
+## 45.4 The brightness check implements section 41's lesson rather than repeating its bug
+
+Judging brightness immediately would report a dark room on a well-lit one: the reference
+webcam sits near 52/255 for the first 3.5 s and only reaches ~100/255 by 6.5 s. So the check
+waits for exposure to settle, and it compares against a reading **a full window earlier**,
+never against the previous frame. At ~33 ms apart a slow ramp looks flat, and a stability
+test whose window is shorter than the transient it is watching will always report stable
+(41.3).
+
+That property is pinned by a test that feeds a monotonically climbing image through an
+injected clock and asserts the result is **not** reported as settled, with a control that a
+steady image is. The floor of 40/255 is derived from measurement, not chosen: a recording
+that produced no faces measured 2.8/255, and a working indoor value is about 100.
+
+## 45.5 A warning is not a failure
+
+`check` exits 0 on a warning and 1 only on a failure. "Slower than it could be" is not a
+failed run; a CI job that treated it as one would be unusable, and a user would learn to
+pass whatever flag silences the thing most worth reading.
+
+The same logic governs `download-models`: an asset that must be installed by hand reports
+`warn` and exits **0**. The licence split working as designed must not make the command
+permanently red on a correct installation, because a command that always fails is a command
+nobody reads, and this one carries the instructions that matter.
+
+## 45.6 `export-onnx` prints what it cannot declare
+
+`l2cs` is installable only from a git URL, and PyPI rejects direct-URL dependencies in any
+dependency list, extras included, so declaring it would make the wheel unpublishable
+(DEV-1). The printed install line is the entire mitigation, which is why the test asserts
+the exact command rather than "some instructions appeared".
+
+The upstream tensor-order defect is carried across **verbatim** from `export_to_onnx.py`:
+the exported outputs are named `pitch_bins`/`yaw_bins` but L2CS-Net's `forward()` returns yaw
+first. The names are labels attached at export time and do not change what the tensors hold;
+the decode step reads tensor[0] as yaw, which is correct. The warning comment travels with
+the code, and the command also prints it, because the person most likely to "fix" the names
+is the person who just ran the export.
+
+Ordering fix found while testing: the checkpoint path is now validated **before** `torch` is
+imported. A typo should not cost seconds of framework loading.
+
+## 45.7 `calibrate` does what does not need the pipeline
+
+`--list`, `--activate`, `--delete`, `--from-samples` and `--migrate` all work. Interactive
+capture needs `GazeEstimator` and is the one path that does not; it exits 1 with a message
+naming Phase 2 and listing what does work, rather than pretending.
+
+## 45.8 A test whose premise the library had already made impossible
+
+`test_an_active_profile_that_does_not_exist_is_a_failure` was first written by deleting the
+active profile through `delete_profile`, and failed: `delete_profile` clears the active
+pointer on its way out, and `set_active_profile` refuses a name with no file. **Both ordinary
+doors were already shut**, which is good design that the test had not accounted for.
+
+The dangling-pointer state is still reachable by editing the profile directory by hand or by
+a partial sync, so the test now builds it out of band and says why in its docstring. Recorded
+because the first version would have been easy to "fix" by weakening the assertion, and the
+right answer was that the library was already better than the test assumed.
+
+## 45.9 Coverage
+
+Total **88%**, past the Phase 8 target of 80% and up from 78%.
+
+| Module | Cover |
+|---|---|
+| `cli.py` | 94% |
+| `diagnostics.py` | 93% |
+| `capture/base.py` | 96% |
+| `capture/video.py` | 98% |
+| `capture/webcam.py` | 93% |
+
+The uncovered remainder in `cli.py` is the `export-onnx` body past the dependency gate,
+which cannot run without `torch` and `l2cs` installed. `calibration/collector.py` at 48% is
+untouched by this work and remains the largest gap.

@@ -43,6 +43,23 @@ this file records what changed, per phase.
   after a truncated transfer, and enforcing the licence split: the MediaPipe
   landmarker auto-downloads, the gaze weights print instructions and stop. Both
   test files are network-free.
+- **Phase 4:** the capture layer. `FrameSource` protocol (structural, so an
+  application that already owns a camera can pass its own object in),
+  `WebcamSource` with threaded capture and per-platform backend selection
+  (MSMF on Windows, AVFoundation on macOS, V4L2 on Linux, overridable),
+  `VideoFileSource`, and `FrameSequenceSource` for replaying frames already in
+  memory with no codec involved. The legacy server's dedicated capture thread
+  is preserved, including its deliberate frame dropping: the slot holds one
+  frame and a slow consumer jumps to the freshest rather than working through a
+  backlog. `WebcamGazeTracker` is **not** included; it composes a source with a
+  `GazeEstimator` and is gated on Phase 2.
+- **Phase 6:** the CLI. `download-models`, `check`, `calibrate` and
+  `export-onnx`. `serve` (Phase 7) and `demo` (needs the pipeline) are absent
+  rather than stubbed. `check` turns most of `docs/troubleshooting.md` into one
+  command: it reports a CPU-only ONNX provider, a missing or wrong model file,
+  a missing or unselected calibration, a camera that will not open, and a room
+  too dark for face detection, each with its remedy. Diagnosis lives in the new
+  `focusedgaze.diagnostics` module so it is testable without a camera.
 - **Phase 7:** the WebSocket wire format documented from the source before
   extraction (`docs/wire_format.md`), plus the design decisions the
   reconnaissance forced. **No server code has landed**; `server/websocket.py`
@@ -96,6 +113,16 @@ this file records what changed, per phase.
   install and run on Linux across Python **3.12, 3.13 and 3.14** (CI run 2).
   `requires-python = ">=3.12"` and the 3.12/3.13 classifiers are now tested
   rather than inferred, closing the Phase 9 wheel task early.
+- **Coverage is 88%**, past the Phase 8 target of 80%. `cli.py` 94%,
+  `diagnostics.py` 93%, the capture modules 93-98%.
+- **The capture layer is mutation-checked.** Four defects introduced and each
+  caught: a `read()` that returns the slot without waiting, a `release()` that
+  does not join the capture thread, a capture loop that queues instead of
+  dropping, and an `__exit__` that does not release.
+- **Per-platform backend selection is tested for every platform from one
+  machine.** `resolve_backend` takes the platform as an argument for that
+  reason; §42 is what it cost to learn that platform behaviour checked on one
+  platform is not checked.
 - **Phase 5 calibration is numerically verified.** `tests/test_calibration_profile.py`
   replays all 169 recorded cases through the pure-NumPy `apply()`: worst drift
   **0.000e+00**, bit-for-bit with the legacy scikit-learn pipeline rather than
