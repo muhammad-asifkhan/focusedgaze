@@ -123,9 +123,6 @@ JSON: it loads without scikit-learn and does not execute code on load.
 `GazeEstimator`, which is Phase 2. Running `focusedgaze calibrate` with no action
 says so and lists what does work rather than pretending.
 
-Calibration is **per person, per machine, and per seating position**. Move the
-laptop, change chairs, or swap users, and it needs redoing.
-
 Calibration is **per person, per machine, and per seating position**. It is the
 file the whole system depends on. Move the laptop, change chairs, or swap users,
 and it needs redoing.
@@ -450,7 +447,7 @@ and no public function prints. Configuring output is the application's job.
 
 ---
 
-## 9. The WebSocket server **[PLANNED]**
+## 9. The WebSocket server **[SHIPPED]**
 
 ```bash
 focusedgaze serve [--host HOST] [--port PORT] [--profile NAME]
@@ -524,7 +521,7 @@ Then ten lines of Python, as in section 4.
 | `WebcamGazeTracker` | **[PLANNED]**, needs the pipeline |
 | CLI: `download-models`, `check`, `calibrate`, `export-onnx` | **[SHIPPED]** |
 | CLI: `serve`, `demo` | **[PLANNED]** |
-| WebSocket server | **[PLANNED]**, contract fixed |
+| WebSocket server | **[SHIPPED]**, verified against the real browser client |
 
 For what runs today with executed examples, see [usage.md](usage.md). That
 document is the honest present; this one is the intended destination.
