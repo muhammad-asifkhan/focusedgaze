@@ -3281,3 +3281,257 @@ The branching change is itself gated by the procedure it introduces: committed o
 four checks run locally, CI observed green on `dev`, then merged `--no-ff` and CI confirmed
 green on `main` separately. A policy whose own introduction bypassed it would be worth
 nothing.
+
+---
+
+# Section 47 - Phase 7: the server extra, against the revised contract
+
+## 47.1 What landed
+
+`focusedgaze/server/websocket.py`, plus `serve` in the CLI and a `ServerError` in the
+exception tree. Built against the **revised** exit criterion (section 39): the original was
+not satisfiable, because the game returns early on any message that is not `type: "input"`,
+so a strictly gaze-only server leaves it connected, motionless, with no error anywhere.
+
+The SDK emits both messages:
+
+| Message | Fields | Read by |
+|---|---|---|
+| `gaze` | `type, ok, x, y, t` | `gaze_test.html` only |
+| `input` | `type, mode, source, ok, x, y, t` | the game |
+
+`mode` and `source` are the constant `"gaze"`. **No gesture vocabulary enters the SDK**: no
+`hand_ok`, no `click_seq`, no pinch, no mode concept. The wrapper replaces the input message
+through `resolve_input`, which **replaces** rather than appends, because two input messages
+per tick would let the client take whichever arrived last and the cursor would be driven by
+scheduling order.
+
+Both pacing rules are preserved and pinned by tests that read them off the wire, because
+that is the only place they are observable: `input` every tick, `gaze` only when the reading
+changes, `gaze` before `input` within a tick, and nothing sent at all when no client is
+connected while the loop keeps ticking.
+
+## 47.2 The chdir is gone, and where its four lookups went
+
+R-2. The legacy server changes the working directory to its own before importing the gaze
+modules, and four relative lookups ride on it. A library must not do that: it is
+process-global and would break any host application. Removing it without replacing all four
+would change behaviour silently, and section 1.4 finding F1 already measured what that
+costs, 117.406 cm against 121.244 cm for identical landmarks depending only on the launch
+directory.
+
+All four now resolve explicitly. None needed new code in this phase: every replacement had
+already landed in an earlier one, which is why this was a deletion rather than a port.
+
+| Legacy lookup | Owner | Resolves now via | Landed in |
+|---|---|---|---|
+| the ONNX gaze model | `gaze_pipeline.py:15-33`, at **import time** | `asset_path(GAZE_MODEL)`, from the managed cache or `FOCUSEDGAZE_MODEL_DIR` | Phase 6 |
+| `face_landmarker.task` | `gaze_server.py:90` | `asset_path(FACE_LANDMARKER)`, same | Phase 6 |
+| `models/calibration_model.pkl` | `load_calibration()` | `profiles_dir()` and `load_active_profile()`, in the platform config directory | Phase 5 |
+| `models/camera_focal.json` | `positioning_gate.py:43` | an explicit `FocalCalibration` argument | Phase 2 |
+
+The fourth was already recorded as a deliberate behaviour change in the CHANGELOG, because
+it is the one that produced the 3.8 cm swing.
+
+## 47.3 The camera lease, and the two sleeps that are not decoration
+
+`pause(timeout=4.0)` and `resume()`. The lease is genuinely shared: not a gaze concept, not
+a gesture concept, an operating-system fact about exclusive webcam ownership. It lives on
+the SDK side because the SDK opens the camera, which means the SDK ships an API whose only
+current caller is a gesture feature it knows nothing about.
+
+The measured values are carried intact, and they sit in **two different places on purpose**:
+
+| Value | Guards | Where it lives now | From |
+|---|---|---|---|
+| 4.0 s | waiting for the camera to actually be released | `pause(timeout=...)`, and `capture.webcam._THREAD_JOIN_TIMEOUT_S` | `gaze_server.py:148` |
+| 0.3 s | after closing, before anything may reopen | `capture.webcam._DRIVER_SETTLE_S` | `gaze_server.py:159` |
+| 0.3 s | after the *other* owner released, before reopening for gaze | `server.DEFAULT_RESUME_SETTLE_S` | `gaze_server.py:216` |
+
+They are not merged into one tidier-looking constant. They guard different transitions, and
+a single shared value would couple two unrelated driver behaviours so that tuning one
+silently changes the other.
+
+## 47.4 The inference section 39 refused to claim is now executed
+
+Section 39 recorded, in bold, that the game playing against the minimal message was
+**inferred from reading the client and had never been run**, and named it as the same defect
+class as the server docstring describing a positioning check that file never performed.
+
+It is now executed. `tests/js/run_input_manager.mjs` loads the **real, unmodified**
+`input-manager.js` under Node, shims the browser globals it touches, points it at a real
+`GazeServer` on an ephemeral port, and reports the client's own public API afterwards. The
+only edit to the client is its hard-coded server URL, and the harness **asserts that
+substitution fired** rather than assuming it, per brief A2: a silent no-op there would leave
+the client dialling the default port and the failure would read as "the server sent nothing"
+rather than "the harness is broken".
+
+Measured, one good reading held steady for two seconds at 60 Hz:
+
+    messages_seen : 66
+    by_type       : gaze 1, input 65, mode 0
+    ok            : true
+    x, y          : 0.25, 0.75      (exactly what the server sent)
+    mode, source  : "gaze", "gaze"
+    handOk        : false
+    gesture       : ""
+    pinching      : false
+    gestureAvailable : false
+    events fired  : ["status"]      and nothing else
+
+Every prediction in section 39 holds:
+
+| Section 39 predicted | Executed result |
+|---|---|
+| the cursor is driven by the seven-field message | `ok` true, coordinates exactly as sent |
+| `handOk` false and `gesture` empty, from the client's coercions | both confirmed |
+| `pinching` stays false | confirmed |
+| `gestureAvailable` stays false, so the mode key correctly does nothing | confirmed |
+| the client's mode stays gaze, so dwell-to-click stays enabled | confirmed |
+| comparing two undefined counters is false, so no click fires | confirmed, across 65 input messages |
+
+**Q7-2 is answered: the SDK does not need to send explicit zero counters.** The client
+stores undefined on its first-message sync, and every subsequent comparison of undefined
+against undefined is false. The only event fired in the whole run was `status`, from the
+socket opening. That answer was contingent on this measurement and is no longer contingent.
+
+The one-gaze-to-65-input ratio also confirms both pacing rules against the **real** client
+rather than only against our own test client: the reading's timestamp was held constant, so
+the gaze feed correctly fell silent after one message while `input` continued every tick.
+
+## 47.5 A behaviour change found by running it, stated under rule 4
+
+The first real-client run produced a full traceback on the server at teardown: the harness
+exits without a close frame, and the legacy handler caught bare `Exception` and printed a
+stack trace for anything.
+
+That is wrong here in a way it was not wrong there. Both clients reconnect forever, at
+1200 ms and 1000 ms (R-8), so a browser tab left closed produces roughly one traceback per
+second indefinitely. An abrupt close is not a failure.
+
+Connection-closed errors are now logged at debug; everything else still gets the full trace.
+The legacy comment says the traceback exists so failures are not silent, not so that
+ordinary disconnects are noisy, and that distinction is preserved. Found by executing, not
+by reading, which is the point of 47.4.
+
+## 47.6 Rule 11 at the transport boundary
+
+`validate_host` is an explicit character class, not a library's opinion of whether a string
+looks like a host. A host reaches the socket bind, and a permissive check is how a typo
+becomes a wildcard bind. Refused: spaces, shell metacharacters, both path separators,
+newlines, leading and trailing hyphens, and anything over 255 characters.
+
+Non-loopback is **warned, not refused** (R-14). Binding wider is a legitimate deliberate
+choice and a terrible accident, so it is said out loud rather than validated away: the
+warning names the stream as webcam-derived and unauthenticated, with no origin check, no
+token and no TLS.
+
+`validate_port` refuses `True` specifically. `bool` is an `int` subclass and binding port 1
+because somebody passed a flag is not a diagnosis anyone wants to make twice. `0` is
+permitted and means "let the OS pick", which is how the tests bind without racing a real
+server for the default port.
+
+## 47.7 Both dependency branches recorded
+
+Rule 3, and the constraint that the core must import with `websockets` absent.
+
+    with websockets:     the server tests run against a real client
+    without websockets:  every focusedgaze module still imports, including
+                         `focusedgaze.server` itself; only `serve_forever` raises
+
+`focusedgaze.server` importing without the extra is deliberate: a caller can construct a
+server, read its docstrings and type-annotate against it in a base install. The dependency
+is deferred into `serve_forever`, which raises `ServerError` carrying the install command,
+never a bare `ImportError` (D8).
+
+The absence is simulated with `ModuleNotFoundError`, not `ImportError`, for the reason
+recorded in 43.6.
+
+`ci.yml` now installs the `server` extra. Without it the Phase 7 tests would have **errored**
+on a missing import rather than skipping, which is a worse failure than not running them: a
+suite that errors reads as broken infrastructure and gets ignored.
+
+## 47.8 A test-isolation trap worth recording
+
+`test_running_the_server_without_websockets_names_the_remedy` failed on first run, and the
+reason is not visible in the traceback: it re-imports the package from scratch to get a
+module tree without `websockets`, which creates a **new `ServerError` class object**. The
+`pytest.raises` was comparing against the one imported at the top of the file, a different
+class with the same name, so it never matched even though the correct error was raised and
+printed directly above the failure.
+
+The fixture now restores `sys.modules` afterwards as well, or every later test would inherit
+the fresh module tree and the same identity confusion.
+
+**Two identically named classes are not the same class**, and a re-import inside a test is
+enough to produce that. The failure presents as "the expected exception was not raised"
+while the expected exception is visible in the output.
+
+## 47.9 `focusedgaze serve` needs `--replay` until Phase 2
+
+The live source is `GazeEstimator`, which does not exist. Rather than bind a port with
+nothing behind it, `serve` with no source exits 1 and says what to do. R-10 is why that
+matters: the launcher treats "port is listening" as "ready" and waits up to 90 s for it, so
+a server that opened the port with no gaze feed would report success for a system that can
+never produce a reading.
+
+`--replay` serves recorded `[ok, x, y]` rows over the real wire format at the real tick
+rate. It is not a toy: it is what drives `gaze_test.html` and the browser game today, and it
+is the same code path the tests in 47.4 exercise.
+
+## 47.10 Deliberately not carried across
+
+- `read_shared_frame` and `GESTURE_DETECT_EVERY`: already dead in the shipped configuration
+  (section 6.3), and game-repo concerns even there.
+- The positioning gate in the `ok` decision: the legacy server never imported one despite
+  its docstring claiming an out-of-zone case. Wiring it in would look like an improvement
+  and would make the cursor vanish whenever the user leaned outside 45-65 cm.
+- The camera release in the gaze loop's teardown: R-12, a guaranteed `NameError`. Its
+  absence is deliberate and is covered in its own commit.
+
+## 47.11 R-11 fixed: a non-object payload no longer drops the connection
+
+Its own commit, per rule 4, with the extraction commit reproducing the bug and a test
+pinning it so the change is visible in the diff rather than folded into the port.
+
+`json.loads` returns any JSON value, so a client sending `"hi"`, `3`, `null`, `true` or a
+list produced a str, int, None, bool or list. The legacy server called the mapping accessor
+on that directly (`gaze_server.py:446`), the resulting `AttributeError` was not caught by
+the inner handler's `except (ValueError, TypeError)`, it escaped the read loop, and the
+socket closed. The browser reconnected 1.2 s later and the command was lost.
+
+Two changes:
+
+- Only JSON **objects** are dispatched. A non-object payload is as meaningless as a
+  malformed one and is now ignored the same way.
+- A hook that raises no longer drops the client. `on_command` belongs to the caller and may
+  raise anything; letting that close the socket would make one bad command look like a
+  network fault, and with both clients reconnecting forever it would loop.
+
+Both directions are tested: five non-object payloads in a row, then a valid command that
+still gets a reply on the same connection, which is what proves the socket survived rather
+than merely that no exception was logged.
+
+## 47.12 R-12: the guaranteed NameError, fixed by construction
+
+The legacy gaze loop releases a capture handle in its `finally` that is never bound in that
+function. Confirmed independently in 39.4: the function begins at line 310, the release is
+at 380, and the only two bindings of that name are at 136 and 239, both in other scopes.
+Every exit from the loop raises. It stayed invisible because it only fires at shutdown, on a
+daemon thread, as the process is dying.
+
+**It is not ported, and it cannot recur here**, which is why this commit adds a test rather
+than a fix. Two structural reasons:
+
+1. The server does not own a camera. The gaze source is injected, so there is no handle in
+   this scope to release wrongly.
+2. Phase 4 made release the frame source's own responsibility, idempotent, and guaranteed
+   through a context manager. `FrameSourceBase.release` marks itself closed **before**
+   tearing down, so a failure during teardown cannot leave a half-released device that a
+   retry re-enters.
+
+The regression test asserts the property that makes the bug impossible rather than the
+absence of one line: a source is released exactly once, on every exit path including an
+exception, and reading afterwards ends the stream instead of raising. That is the same
+property Phase 4 established, restated here because R-12 is where it was originally missing
+and a future refactor that reintroduced a server-owned handle would need to fail loudly.

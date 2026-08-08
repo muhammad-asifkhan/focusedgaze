@@ -54,16 +54,24 @@ this file records what changed, per phase.
   backlog. `WebcamGazeTracker` is **not** included; it composes a source with a
   `GazeEstimator` and is gated on Phase 2.
 - **Phase 6:** the CLI. `download-models`, `check`, `calibrate` and
-  `export-onnx`. `serve` (Phase 7) and `demo` (needs the pipeline) are absent
-  rather than stubbed. `check` turns most of `docs/troubleshooting.md` into one
+  `export-onnx`; `serve` followed in Phase 7. `demo` is absent rather than
+  stubbed, because it needs the pipeline. `check` turns most of `docs/troubleshooting.md` into one
   command: it reports a CPU-only ONNX provider, a missing or wrong model file,
   a missing or unselected calibration, a camera that will not open, and a room
   too dark for face detection, each with its remedy. Diagnosis lives in the new
   `focusedgaze.diagnostics` module so it is testable without a camera.
-- **Phase 7:** the WebSocket wire format documented from the source before
-  extraction (`docs/wire_format.md`), plus the design decisions the
-  reconnaissance forced. **No server code has landed**; `server/websocket.py`
-  is still a stub.
+- **Phase 7:** the gaze-only WebSocket server, `focusedgaze.server.websocket`,
+  plus the `serve` CLI command and a `ServerError` in the exception tree. Emits
+  the `gaze` message with its shape preserved exactly, and a **minimal** seven-
+  field `input` message (`type`, `mode`, `source`, `ok`, `x`, `y`, `t`) whose
+  `mode` and `source` are the constant `"gaze"`. No gesture vocabulary enters the
+  SDK. Both legacy pacing rules are preserved: `input` every tick, `gaze` only
+  when the reading changes. Three hooks (`on_connect`, `on_command`,
+  `resolve_input`) let the game repo's wrapper **replace** the input message with
+  its full twelve-field one. The camera lease arrives as `pause()`/`resume()`,
+  carrying the measured 4.0 s wait and both 0.3 s driver sleeps. The legacy
+  `os.chdir` is **deleted**, not delegated, and all four relative lookups that
+  rode on it now resolve explicitly; see `MIGRATION_AUDIT.md` §47.2.
 - CI and release workflows with PyPI Trusted Publishing, configured for the real
   owner and repository. TestPyPI is a required predecessor job, and the build
   fails if any distribution contains model weights, calibration profiles or test
@@ -74,6 +82,16 @@ this file records what changed, per phase.
 - `.gitattributes`, line endings normalised to LF in the repository.
 
 ### Changed
+- **Behaviour change, deliberate:** valid JSON that is not an object no longer
+  closes the WebSocket connection (R-11). The legacy handler called the mapping
+  accessor on whatever `json.loads` returned, so `"hi"` raised `AttributeError`,
+  the error escaped the read loop and the socket closed; the browser reconnected
+  1.2 s later and the command was lost. Only JSON objects are dispatched now, and
+  a hook that raises no longer drops the client either. `MIGRATION_AUDIT.md` §47.11.
+- **Behaviour change, deliberate:** an abrupt client disconnect is logged at debug
+  rather than as a traceback. Both clients reconnect forever, so a closed browser
+  tab produced roughly one stack trace per second. Genuine errors still get the
+  full trace. `MIGRATION_AUDIT.md` §47.5.
 - **Behaviour change, deliberate:** `ModelAsset` now judges a filename by the
   same rule on every platform. It was `Path(filename).name != filename`, and
   `Path` means `WindowsPath` on Windows and `PosixPath` on Linux, so one
@@ -109,6 +127,13 @@ this file records what changed, per phase.
   never executed.
 
 ### Verified
+- **The browser game plays against the minimal message, executed rather than
+  inferred.** Audit §39 recorded that claim as read off the client and never run.
+  The real, unmodified `input-manager.js` now runs under Node against a real
+  server: 66 messages (1 `gaze`, 65 `input`), cursor driven to exactly the
+  coordinates sent, `handOk` false, `gesture` empty, `pinching` false, mode and
+  source `"gaze"`, and **no activation event fired at all**. That answers Q7-2:
+  the SDK does not need to send explicit zero counters. `MIGRATION_AUDIT.md` §47.4.
 - **Linux wheel availability resolved.** `mediapipe` and `opencv-python`
   install and run on Linux across Python **3.12, 3.13 and 3.14** (CI run 2).
   `requires-python = ">=3.12"` and the 3.12/3.13 classifiers are now tested

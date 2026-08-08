@@ -1,16 +1,21 @@
 """The ``focusedgaze`` console entry point.
 
-Four commands land in Phase 6:
+Five commands:
 
-    download-models   fetch what may be fetched, explain what may not
-    check             diagnose the environment
-    calibrate         manage calibration profiles
-    export-onnx       convert PyTorch L2CS weights to the ONNX graph
+    download-models   fetch what may be fetched, explain what may not   (Phase 6)
+    check             diagnose the environment                          (Phase 6)
+    calibrate         manage calibration profiles                       (Phase 6)
+    export-onnx       convert PyTorch L2CS weights to the ONNX graph    (Phase 6)
+    serve             run the gaze WebSocket server                     (Phase 7)
 
-Two do not, and are absent rather than stubbed: ``serve`` belongs to Phase 7,
-and ``demo`` needs a pipeline that does not exist yet. A subcommand that parses
-and then apologises is worse than one that is not there, because it appears in
-``--help`` as though it were a feature.
+``demo`` is absent rather than stubbed: it needs a pipeline that does not exist
+yet. A subcommand that parses and then apologises is worse than one that is not
+there, because it appears in ``--help`` as though it were a feature.
+
+``serve`` is present but currently needs ``--replay``: its live source is
+``GazeEstimator``, which is Phase 2. Replay is not a toy, it is the same wire
+format over the same transport, which is what makes the contract testable
+against ``gaze_test.html`` and the browser game today.
 
 EXIT CODES
 ----------
@@ -32,12 +37,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final, TextIO
 
 from . import __version__
 from .exceptions import GazeError
+from .server import DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SEND_HZ
 
 __all__ = ["main"]
 
@@ -204,6 +211,98 @@ def _cmd_calibrate(args: argparse.Namespace, out: TextIO) -> int:
         file=out,
     )
     return 1
+
+
+def _cmd_serve(args: argparse.Namespace, out: TextIO) -> int:
+    """Run the gaze WebSocket server.
+
+    The live source needs ``GazeEstimator``, which is Phase 2. Until it lands,
+    ``--replay`` is the only source, and it is a real one: it drives
+    ``gaze_test.html`` and the browser game exactly as a camera would, which is
+    what makes the wire format testable today rather than after Phase 2.
+    """
+    import asyncio
+
+    from .server import GazeServer, GazeSnapshot
+
+    if not args.replay:
+        print(
+            "focusedgaze serve needs a gaze source.\n"
+            "\n"
+            "The live camera source is GazeEstimator, which is Phase 2 and is not\n"
+            "implemented yet. Until it lands, replay recorded readings:\n"
+            "\n"
+            "    focusedgaze serve --replay readings.json\n"
+            "\n"
+            "where readings.json is a list of [ok, x, y] rows, or an object with a\n"
+            '"readings" key holding one. That drives gaze_test.html and the game\n'
+            "over the real wire format.",
+            file=out,
+        )
+        return 1
+
+    readings = _load_readings(args.replay)
+    print(f"Replaying {len(readings)} readings at {args.hz:g} Hz.", file=out)
+
+    class ReplaySource:
+        """Walks the recording, holding the last reading once it runs out."""
+
+        def __init__(self) -> None:
+            self._i = 0
+
+        def latest(self) -> GazeSnapshot:
+            ok, x, y = readings[min(self._i, len(readings) - 1)]
+            self._i += 1
+            # A fresh timestamp per reading, so the broadcaster's dedup key
+            # changes and the gaze feed actually paces (R-5).
+            return GazeSnapshot(ok=ok, x=x, y=y, t=time.time())
+
+        def pause(self, timeout: float = 4.0) -> bool:
+            return True
+
+        def resume(self) -> bool:
+            return True
+
+    server = GazeServer(ReplaySource(), host=args.host, port=args.port, send_hz=args.hz)
+    print(f"Serving at ws://{args.host}:{args.port} - Ctrl+C to stop.", file=out)
+    try:
+        asyncio.run(server.serve_forever())
+    except KeyboardInterrupt:
+        print("\nStopped.", file=out)
+    return 0
+
+
+def _load_readings(path: str | Path) -> list[tuple[bool, float | None, float | None]]:
+    """Read ``[ok, x, y]`` rows from JSON.
+
+    Raises:
+        GazeError: unreadable, not JSON, or not a list of 3-element rows.
+    """
+    source = Path(path)
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise GazeError(f"could not read {source}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GazeError(f"{source} is not valid JSON: {exc}") from exc
+
+    rows = raw.get("readings") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list) or not rows:
+        raise GazeError(
+            f"{source} holds no readings. Expected a JSON list of [ok, x, y] rows, "
+            'or an object with a "readings" key holding one.'
+        )
+    out: list[tuple[bool, float | None, float | None]] = []
+    for i, row in enumerate(rows):
+        if not isinstance(row, (list, tuple)) or len(row) != 3:
+            raise GazeError(f"{source}: row {i} is not [ok, x, y]: {row!r}")
+        ok = bool(row[0])
+        # x and y must stay None when ok is false (R-6): the client's guard is
+        # what preserves its last good position.
+        x = None if row[1] is None else float(row[1])
+        y = None if row[2] is None else float(row[2])
+        out.append((ok, x, y))
+    return out
 
 
 def _cmd_export_onnx(args: argparse.Namespace, out: TextIO) -> int:
@@ -387,6 +486,19 @@ def _build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--name", default="default", help="profile name to write")
     calibrate.add_argument("--directory", help="profile directory (default: user config dir)")
 
+    serve = sub.add_parser("serve", help="run the gaze WebSocket server")
+    serve.add_argument(
+        "--host", default=DEFAULT_HOST,
+        help=f"bind address (default: {DEFAULT_HOST}; keep it loopback, the stream "
+             "is unauthenticated)",
+    )
+    serve.add_argument("--port", type=int, default=DEFAULT_PORT, help="TCP port")
+    serve.add_argument("--hz", type=float, default=DEFAULT_SEND_HZ, help="broadcast tick rate")
+    serve.add_argument(
+        "--replay", metavar="FILE",
+        help="serve recorded [ok, x, y] readings from JSON instead of a camera",
+    )
+
     export = sub.add_parser("export-onnx", help="convert PyTorch L2CS weights to ONNX")
     export.add_argument(
         "--weights", default="L2CSNet_gaze360.pkl", help="the PyTorch checkpoint to convert"
@@ -419,6 +531,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         "check": _cmd_check,
         "calibrate": _cmd_calibrate,
         "export-onnx": _cmd_export_onnx,
+        "serve": _cmd_serve,
     }
     try:
         return handlers[args.command](args, stream)

@@ -553,3 +553,68 @@ def _drain(source) -> list[Frame]:
     while (frame := source.read()) is not None:
         out.append(frame)
     return out
+
+
+# ---------------------------------------------------------------------------
+# R-12: the legacy shutdown NameError, and the property that makes it impossible.
+# ---------------------------------------------------------------------------
+
+
+def test_a_source_is_released_exactly_once_on_every_exit_path() -> None:
+    """R-12 cannot recur, and this is the property that guarantees it.
+
+    The legacy gaze loop released a capture handle in its `finally` that was
+    never bound in that function (audit 39.4), so every exit from the loop
+    raised NameError. It stayed invisible because it only fired at shutdown, on
+    a daemon thread, as the process was dying.
+
+    The fix is structural rather than a corrected line: release belongs to the
+    source, is idempotent, and is guaranteed by the context manager. Asserted
+    across all three exit paths, because "it does not raise" is not the same as
+    "it released exactly once".
+    """
+    normal, _ = _webcam()
+    with normal:
+        normal.read()
+    assert normal.closed
+
+    explicit, capture = _webcam()
+    explicit.release()
+    explicit.release()
+    explicit.release()
+    assert capture.released
+    assert explicit.read() is None, "a released source must end the stream, not reopen"
+
+    raising, raising_capture = _webcam()
+    with pytest.raises(RuntimeError), raising:
+        raise RuntimeError("shutdown")
+    assert raising_capture.released
+
+
+def test_release_marks_closed_before_teardown_so_a_failure_cannot_be_retried_into() -> None:
+    """A teardown that raises must not leave a half-released device reachable.
+
+    This is the ordering that makes idempotence real rather than nominal: if
+    `_release` throws, the source is already marked closed, so a retry returns
+    immediately instead of re-entering teardown on a device that is partly gone.
+    """
+    from focusedgaze.capture.base import FrameSourceBase
+
+    class Exploding(FrameSourceBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def _read_frame(self):
+            return None
+
+        def _release(self) -> None:
+            self.attempts += 1
+            raise OSError("device vanished mid-teardown")
+
+    source = Exploding()
+    with pytest.raises(OSError, match="vanished"):
+        source.release()
+    assert source.closed
+    source.release()
+    assert source.attempts == 1, "teardown was re-entered on an already-closed source"

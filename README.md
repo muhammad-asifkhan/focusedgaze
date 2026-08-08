@@ -5,17 +5,16 @@ screen coordinate.
 
 > **Status: in development (0.0.0).** Implemented and tested: configuration, result types,
 > the exception tree, the One Euro filter, the positioning gate, the model registry and
-> downloader, calibration, the capture layer, and four of the six CLI commands
-> (`download-models`, `check`, `calibrate`, `export-onnx`). **Not yet written**: the gaze
-> pipeline itself, `WebcamGazeTracker`, and the server. The API shown below is the agreed
+> downloader, calibration, the capture layer, the WebSocket server, and five of the six CLI commands
+> (`download-models`, `check`, `calibrate`, `export-onnx`, `serve`). **Not yet written**:
+> the gaze pipeline itself, `WebcamGazeTracker`, and `demo`. The API shown below is the agreed
 > contract, not working code, and every block that describes it is marked. Do not depend on
 > this release. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has actually landed.
 >
 > If something is not working, run `focusedgaze check --no-camera` first.
 >
-> **CI is green** on Python 3.12, 3.13 and 3.14: 214 passed, 5 skipped. It was red for five
-> pushes on a platform assumption in the asset registry, since fixed. See
-> `MIGRATION_AUDIT.md` §42.
+> **CI is green** on Python 3.12, 3.13 and 3.14. It was red for five pushes on a platform
+> assumption in the asset registry, since fixed. See `MIGRATION_AUDIT.md` §42.
 
 ### Documentation
 

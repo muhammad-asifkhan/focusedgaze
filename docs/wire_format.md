@@ -7,8 +7,18 @@ summary of it.
 **Authority:** `<LEGACY>\gaze_server.py` and `<GAME>\input-manager.js`. Where a
 statement is inferred rather than read, it says so in bold.
 
-**Status:** analysis only. No server code has been written. Nothing in the legacy
-pipeline or the game was modified to produce this.
+**Status:** the reconnaissance below is unchanged and still describes the legacy server.
+Phase 7 has since implemented it as `focusedgaze.server.websocket`, against resolution
+**(d)** in section 8: a minimal gaze-only `input` message plus the three hooks.
+
+**Q7-1 is decided: (d).** **Q7-2 is answered by measurement, not inference** - the SDK does
+*not* send explicit zero counters, because the real client was executed against the real
+server and no activation fired across 65 input messages. **Q7-5 is decided: yes**,
+`gaze_test.html` stays supported, which is why the `gaze` message remains in the SDK.
+See MIGRATION_AUDIT.md section 47.
+
+Nothing in the legacy pipeline or the game was modified to produce this document, or to
+verify it.
 
 `<LEGACY>` and `<GAME>` are the paths recorded in `CONTEXT_HANDOFF.md` section 2.
 

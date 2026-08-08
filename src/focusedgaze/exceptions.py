@@ -28,6 +28,7 @@ __all__ = [
     "PositioningError",
     "ProfileVersionError",
     "ProviderError",
+    "ServerError",
 ]
 
 
@@ -81,6 +82,17 @@ class ProfileVersionError(CalibrationError):
 
 class CameraError(GazeError):
     """A frame source could not be opened, read from, or configured."""
+
+
+class ServerError(GazeError, RuntimeError):
+    """The WebSocket server could not start or run.
+
+    Covers the missing ``websockets`` package, which the base install
+    deliberately does not carry. Named for the same reason as
+    :class:`ProviderError`: an optional dependency that is absent is an expected
+    state with a known remedy, and the message must carry the remedy rather than
+    surfacing as a bare ``ImportError`` (D8).
+    """
 
 
 class PositioningError(GazeError):
