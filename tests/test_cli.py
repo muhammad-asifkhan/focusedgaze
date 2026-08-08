@@ -53,14 +53,18 @@ def test_no_arguments_prints_help_and_succeeds() -> None:
     assert "download-models" in output and "check" in output
 
 
-def test_the_unimplemented_commands_are_absent_rather_than_stubbed() -> None:
-    """A subcommand that parses and apologises reads as a feature in --help."""
+def test_demo_is_absent_rather_than_stubbed() -> None:
+    """A subcommand that parses and apologises reads as a feature in --help.
+
+    `serve` landed in Phase 7 and is listed. `demo` still needs the pipeline.
+    """
     _, output = run()
-    assert "serve" not in output
     assert "demo" not in output
 
 
-@pytest.mark.parametrize("command", ["download-models", "check", "calibrate", "export-onnx"])
+@pytest.mark.parametrize(
+    "command", ["download-models", "check", "calibrate", "export-onnx", "serve"]
+)
 def test_every_command_is_reachable(command: str) -> None:
     _, output = run()
     assert command in output
@@ -385,3 +389,58 @@ def test_export_onnx_reports_a_missing_checkpoint(monkeypatch, tmp_path) -> None
     code, output = run("export-onnx", "--weights", str(tmp_path / "absent.pkl"))
     assert code == 1
     assert "No PyTorch checkpoint" in output
+
+
+# ---------------------------------------------------------------------------
+# serve
+# ---------------------------------------------------------------------------
+
+
+def test_serve_without_a_source_says_what_to_do_rather_than_starting() -> None:
+    """The live source is Phase 2. Saying so beats binding a port with no feed.
+
+    R-10: the launcher treats "port is listening" as "ready". A server that
+    opened the port with nothing behind it would report success for a system
+    that can never produce a reading.
+    """
+    code, output = run("serve")
+    assert code == 1
+    assert "Phase 2" in output
+    assert "--replay" in output
+
+
+def test_serve_rejects_a_malformed_replay_file(tmp_path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text("[[1, 2]]", encoding="utf-8")
+    code, output = run("serve", "--replay", str(path))
+    assert code == 1
+    assert output.startswith("error: ")
+    assert "[ok, x, y]" in output
+
+
+def test_serve_rejects_an_out_of_range_port(tmp_path) -> None:
+    """Rule 11 reaches the CLI: the port is validated before anything binds."""
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps([[True, 0.5, 0.5]]), encoding="utf-8")
+    code, output = run("serve", "--replay", str(path), "--port", "70000")
+    assert code == 1
+    assert "port must be between" in output
+
+
+def test_serve_rejects_a_host_outside_the_character_class(tmp_path) -> None:
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps([[True, 0.5, 0.5]]), encoding="utf-8")
+    code, output = run("serve", "--replay", str(path), "--host", "bad host;rm")
+    assert code == 1
+    assert "not permitted in a host" in output
+
+
+def test_a_replay_reading_keeps_null_coordinates_when_not_ok(tmp_path) -> None:
+    """R-6 survives the JSON round trip: false must carry null, not 0."""
+    from focusedgaze.cli import _load_readings
+
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps([[False, None, None], [True, 0.25, 0.75]]), encoding="utf-8")
+    readings = _load_readings(path)
+    assert readings[0] == (False, None, None)
+    assert readings[1] == (True, 0.25, 0.75)
