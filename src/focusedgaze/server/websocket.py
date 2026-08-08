@@ -458,12 +458,25 @@ class GazeServer:
             return
         if self._on_command is None:
             return
-        # NOTE (R-11): `msg` may be any JSON value, including a string or a
-        # number, and this attribute lookup raises AttributeError on those. That
-        # propagates out of the `async for` and closes the connection. This is
-        # the legacy behaviour, reproduced deliberately during extraction under
-        # rule 4 and fixed in its own commit immediately after.
-        result = self._on_command(msg)
+        # R-11, fixed. `json.loads` returns any JSON value, so a client sending
+        # `"hi"`, `3` or `null` produces a str, an int or None. The legacy server
+        # called `.get` on that directly, the AttributeError escaped the read
+        # loop, and the connection closed; the browser then reconnected 1.2 s
+        # later and the command was simply lost.
+        #
+        # Only objects are dispatched. A non-object payload is as meaningless as
+        # a malformed one and is ignored the same way.
+        if not isinstance(msg, dict):
+            _log.debug("ignoring a %s payload: commands must be JSON objects", type(msg).__name__)
+            return
+        try:
+            result = self._on_command(msg)
+        except Exception:  # noqa: BLE001
+            # A hook belongs to the caller and may raise anything. Letting that
+            # drop the socket would make one bad command look like a network
+            # fault, and with both clients reconnecting forever it would loop.
+            _log.exception("on_command failed; the connection is kept open")
+            return
         if result is not None:
             # To EVERY client, not just the sender: two open tabs must agree.
             self._broadcast(result)

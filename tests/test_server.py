@@ -431,36 +431,58 @@ def test_the_stub_source_satisfies_the_protocol() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The latent bugs, pinned AS THEY ARE.
-#
-# Rule 4: move first, improve second, in separate commits. These record the
-# behaviour the extraction faithfully reproduces. The commits that follow change
-# them, and these tests change with them, which is what makes the fix visible in
-# the diff rather than silently folded into the port.
+# R-11, fixed. These replace the tests that pinned the bug.
 # ---------------------------------------------------------------------------
 
 
 @sync
-async def test_r11_valid_json_that_is_not_an_object_closes_the_connection() -> None:
-    """R-11, reproduced. `json.loads('"hi"')` is a string, and the hook's
-    attribute lookup raises through the read loop and drops the socket.
+async def test_r11_valid_json_that_is_not_an_object_no_longer_closes_the_connection() -> None:
+    """`json.loads` returns any JSON value, not only objects.
 
-    In the legacy server the lookup was `msg.get("cmd")` in the handler itself
-    (`gaze_server.py:446`); here the dispatch is delegated, so the same crash
-    happens one frame deeper. Same defect, same consequence: the browser
-    reconnects 1.2 s later and the command is lost.
+    The legacy server called `.get` on the result directly, so `"hi"` raised
+    AttributeError, the error escaped the read loop and the socket closed. The
+    browser then reconnected 1.2 s later and the command was lost. Now a
+    non-object payload is ignored exactly like a malformed one.
     """
     def on_command(msg: dict) -> dict | None:
-        return {"echo": msg.get("cmd")}          # AttributeError on a str
+        return {"type": "mode", "mode": msg.get("mode", "")}
 
     async with ServerHarness(send_hz=200.0, on_command=on_command) as h:
         h.source.snapshot = GazeSnapshot(ok=True, x=0.1, y=0.2, t=1.0)
         from websockets.asyncio.client import connect
-        from websockets.exceptions import ConnectionClosed
 
         async with connect(h.url) as ws:
-            await ws.recv()                       # confirm traffic is flowing
-            await ws.send(json.dumps("hi"))       # valid JSON, not an object
-            with pytest.raises(ConnectionClosed):
-                for _ in range(400):
-                    await asyncio.wait_for(ws.recv(), 5.0)
+            await ws.recv()
+            for payload in ('"hi"', "3", "null", "[1, 2]", "true"):
+                await ws.send(payload)
+            # Still alive, and still serving: the whole point of the fix.
+            await ws.send(json.dumps({"cmd": "mode", "mode": "gaze"}))
+            found = None
+            for _ in range(80):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), 5.0))
+                if msg["type"] == "mode":
+                    found = msg
+                    break
+    assert found is not None, "the connection died, or the command never arrived"
+    assert found["mode"] == "gaze"
+
+
+@sync
+async def test_a_hook_that_raises_does_not_drop_the_client() -> None:
+    """A hook belongs to the caller and may raise anything.
+
+    Letting that close the socket would make one bad command look like a network
+    fault, and with both clients reconnecting forever it would loop.
+    """
+    def explode(msg: dict) -> dict | None:
+        raise RuntimeError("hook is broken")
+
+    async with ServerHarness(send_hz=200.0, on_command=explode) as h:
+        h.source.snapshot = GazeSnapshot(ok=True, x=0.1, y=0.2, t=1.0)
+        from websockets.asyncio.client import connect
+
+        async with connect(h.url) as ws:
+            await ws.recv()
+            await ws.send(json.dumps({"cmd": "mode", "mode": "gaze"}))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), 5.0))
+            assert msg["type"] in ("gaze", "input"), "the feed stopped after a hook error"

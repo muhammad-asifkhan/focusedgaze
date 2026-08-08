@@ -3488,3 +3488,50 @@ is the same code path the tests in 47.4 exercise.
   and would make the cursor vanish whenever the user leaned outside 45-65 cm.
 - The camera release in the gaze loop's teardown: R-12, a guaranteed `NameError`. Its
   absence is deliberate and is covered in its own commit.
+
+## 47.11 R-11 fixed: a non-object payload no longer drops the connection
+
+Its own commit, per rule 4, with the extraction commit reproducing the bug and a test
+pinning it so the change is visible in the diff rather than folded into the port.
+
+`json.loads` returns any JSON value, so a client sending `"hi"`, `3`, `null`, `true` or a
+list produced a str, int, None, bool or list. The legacy server called the mapping accessor
+on that directly (`gaze_server.py:446`), the resulting `AttributeError` was not caught by
+the inner handler's `except (ValueError, TypeError)`, it escaped the read loop, and the
+socket closed. The browser reconnected 1.2 s later and the command was lost.
+
+Two changes:
+
+- Only JSON **objects** are dispatched. A non-object payload is as meaningless as a
+  malformed one and is now ignored the same way.
+- A hook that raises no longer drops the client. `on_command` belongs to the caller and may
+  raise anything; letting that close the socket would make one bad command look like a
+  network fault, and with both clients reconnecting forever it would loop.
+
+Both directions are tested: five non-object payloads in a row, then a valid command that
+still gets a reply on the same connection, which is what proves the socket survived rather
+than merely that no exception was logged.
+
+## 47.12 R-12: the guaranteed NameError, fixed by construction
+
+The legacy gaze loop releases a capture handle in its `finally` that is never bound in that
+function. Confirmed independently in 39.4: the function begins at line 310, the release is
+at 380, and the only two bindings of that name are at 136 and 239, both in other scopes.
+Every exit from the loop raises. It stayed invisible because it only fires at shutdown, on a
+daemon thread, as the process is dying.
+
+**It is not ported, and it cannot recur here**, which is why this commit adds a test rather
+than a fix. Two structural reasons:
+
+1. The server does not own a camera. The gaze source is injected, so there is no handle in
+   this scope to release wrongly.
+2. Phase 4 made release the frame source's own responsibility, idempotent, and guaranteed
+   through a context manager. `FrameSourceBase.release` marks itself closed **before**
+   tearing down, so a failure during teardown cannot leave a half-released device that a
+   retry re-enters.
+
+The regression test asserts the property that makes the bug impossible rather than the
+absence of one line: a source is released exactly once, on every exit path including an
+exception, and reading afterwards ends the stream instead of raising. That is the same
+property Phase 4 established, restated here because R-12 is where it was originally missing
+and a future refactor that reintroduced a server-owned handle would need to fail loudly.
