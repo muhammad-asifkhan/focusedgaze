@@ -20,12 +20,14 @@ This is 0.0.0 and the pipeline is mid-extraction. What is exported here is what
 is implemented; what is missing is missing on purpose, because an ``__all__``
 entry that cannot be imported is worse than an honest omission.
 
-    Implemented and tested   config, types, exceptions, filters, positioning,
-                             assets (via ``focusedgaze.assets``), calibration,
-                             capture (frame sources)
-    Not yet implemented      GazeEstimator (Phase 2), and WebcamGazeTracker,
-                             which composes an estimator with a frame source
-                             and therefore waits on it.
+    The pipeline is complete: config, types, exceptions, filters, positioning,
+    assets, calibration, capture, the gaze core (``GazeEstimator``), the
+    convenience wrapper (``WebcamGazeTracker``), the WebSocket server and all six
+    CLI commands.
+
+    ``GazeEstimator`` is the foundation and is pure: frames in, results out, no
+    camera and no network. ``WebcamGazeTracker`` owns a webcam and is the
+    convenience built on top.
 
 Calibration was the migration's highest numerical risk, because a wrong
 polynomial does not raise: it returns a smooth, believable surface in the wrong
@@ -63,6 +65,7 @@ from .capture import (
     FrameSequenceSource,
     FrameSource,
     VideoFileSource,
+    WebcamGazeTracker,
     WebcamSource,
 )
 from .config import (
@@ -74,6 +77,7 @@ from .config import (
     PositioningConfig,
     RuntimeConfig,
 )
+from .core import GazeEstimator
 from .exceptions import (
     CalibrationError,
     CameraError,
@@ -107,6 +111,7 @@ __all__ = [
     "FrameSource",
     "GazeConfig",
     "GazeError",
+    "GazeEstimator",
     "GazeResult",
     "GazeStatus",
     "LandmarkConfig",
@@ -118,6 +123,7 @@ __all__ = [
     "ProviderError",
     "RuntimeConfig",
     "VideoFileSource",
+    "WebcamGazeTracker",
     "WebcamSource",
     "__version__",
     "fit_calibration",

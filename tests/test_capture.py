@@ -618,3 +618,123 @@ def test_release_marks_closed_before_teardown_so_a_failure_cannot_be_retried_int
     assert source.closed
     source.release()
     assert source.attempts == 1, "teardown was re-entered on an already-closed source"
+
+
+# ---------------------------------------------------------------------------
+# WebcamGazeTracker: the convenience layer, and who owns the camera.
+# ---------------------------------------------------------------------------
+
+
+class _StubEstimator:
+    """Records the frames it was given and returns a fixed result."""
+
+    def __init__(self) -> None:
+        self.frames: list[np.ndarray] = []
+        self.closed = False
+
+    @property
+    def provider(self) -> str:
+        return "StubExecutionProvider"
+
+    def process(self, frame, timestamp=None):
+        from focusedgaze.types import GazeResult, GazeStatus
+
+        self.frames.append(frame.copy())
+        return GazeResult.unavailable(GazeStatus.NO_FACE, 0.0 if timestamp is None else timestamp)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _tracker(frames, mirror=True, source=None):
+    from focusedgaze.capture import WebcamGazeTracker
+    from focusedgaze.config import CameraConfig, GazeConfig
+
+    estimator = _StubEstimator()
+    src = source if source is not None else FrameSequenceSource(frames)
+    tracker = WebcamGazeTracker(
+        config=GazeConfig(camera=CameraConfig(mirror=mirror)),
+        source=src,
+        estimator=estimator,  # type: ignore[arg-type]
+    )
+    return tracker, estimator, src
+
+
+def test_the_tracker_streams_a_result_per_frame() -> None:
+    frames = [_image(i) for i in range(4)]
+    tracker, estimator, _ = _tracker(frames)
+    with tracker:
+        results = list(tracker.stream())
+    assert len(results) == 4
+    assert len(estimator.frames) == 4
+
+
+def test_the_tracker_mirrors_the_frame_because_the_calibration_requires_it() -> None:
+    """Not cosmetic. The polynomial was fitted through a mirrored preview, so an
+    unmirrored frame does not mirror the output, it makes the mapping wrong."""
+    asymmetric = np.zeros((4, 8, 3), dtype=np.uint8)
+    asymmetric[:, 0, :] = 255                       # bright column on the LEFT
+
+    tracker, estimator, _ = _tracker([asymmetric], mirror=True)
+    with tracker:
+        tracker.read()
+    seen = estimator.frames[0]
+    assert seen[:, -1, 0].mean() == 255, "the frame was not flipped"
+    assert seen[:, 0, 0].mean() == 0
+
+
+def test_mirroring_can_be_turned_off() -> None:
+    """The control, so the test above is about the flag and not about nothing."""
+    asymmetric = np.zeros((4, 8, 3), dtype=np.uint8)
+    asymmetric[:, 0, :] = 255
+
+    tracker, estimator, _ = _tracker([asymmetric], mirror=False)
+    with tracker:
+        tracker.read()
+    assert estimator.frames[0][:, 0, 0].mean() == 255, "the frame was flipped anyway"
+
+
+def test_the_tracker_releases_a_source_it_opened() -> None:
+    frames = [_image(1)]
+    tracker, estimator, source = _tracker(frames)
+    # Constructed with an explicit source, so ownership is the caller's; assert
+    # the other direction below.
+    with tracker:
+        tracker.read()
+    assert estimator.closed
+    assert not source.closed, "a caller-supplied source must not be released"
+
+
+def test_the_tracker_does_not_release_a_source_it_was_handed() -> None:
+    """Releasing a camera the application is still using is worse than leaking one."""
+    source = FrameSequenceSource([_image(1)])
+    tracker, _, _ = _tracker(None, source=source)
+    tracker.close()
+    assert not source.closed
+
+
+def test_a_camera_the_tracker_opened_is_released_even_when_the_body_raises() -> None:
+    """R-12's real fix: the device comes back on every exit path."""
+    from focusedgaze.capture import WebcamGazeTracker
+    from focusedgaze.config import CameraConfig, GazeConfig
+
+    capture = FakeCapture()
+    estimator = _StubEstimator()
+    source = WebcamSource(
+        CameraConfig(backend="msmf"),
+        read_timeout=2.0,
+        capture_factory=lambda i, b: capture,
+    )
+    tracker = WebcamGazeTracker(
+        config=GazeConfig(camera=CameraConfig(backend="msmf")),
+        source=source,
+        estimator=estimator,  # type: ignore[arg-type]
+    )
+    # Take ownership so close() releases, mirroring the real constructor path.
+    tracker._owns_source = True
+
+    with pytest.raises(RuntimeError, match="boom"), tracker:
+        tracker.read()
+        raise RuntimeError("boom")
+    assert capture.released, "the camera was not released on an exception"
+    assert estimator.closed

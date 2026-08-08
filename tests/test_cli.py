@@ -53,17 +53,21 @@ def test_no_arguments_prints_help_and_succeeds() -> None:
     assert "download-models" in output and "check" in output
 
 
-def test_demo_is_absent_rather_than_stubbed() -> None:
-    """A subcommand that parses and apologises reads as a feature in --help.
+def test_the_command_set_is_complete() -> None:
+    """All six commands exist now.
 
-    `serve` landed in Phase 7 and is listed. `demo` still needs the pipeline.
+    `demo` and the live path of `serve` were the two that needed
+    ``GazeEstimator``, which landed with Phase 2. Until then they were absent
+    rather than stubbed, because a subcommand that parses and apologises reads
+    as a feature in --help.
     """
     _, output = run()
-    assert "demo" not in output
+    for command in ("download-models", "check", "calibrate", "export-onnx", "serve", "demo"):
+        assert command in output, f"{command} is missing from --help"
 
 
 @pytest.mark.parametrize(
-    "command", ["download-models", "check", "calibrate", "export-onnx", "serve"]
+    "command", ["download-models", "check", "calibrate", "export-onnx", "serve", "demo"]
 )
 def test_every_command_is_reachable(command: str) -> None:
     _, output = run()

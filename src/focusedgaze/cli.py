@@ -1,21 +1,17 @@
 """The ``focusedgaze`` console entry point.
 
-Five commands:
+Six commands, the full set:
 
     download-models   fetch what may be fetched, explain what may not   (Phase 6)
     check             diagnose the environment                          (Phase 6)
     calibrate         manage calibration profiles                       (Phase 6)
     export-onnx       convert PyTorch L2CS weights to the ONNX graph    (Phase 6)
     serve             run the gaze WebSocket server                     (Phase 7)
+    demo              print live readings from the camera               (Phase 2)
 
-``demo`` is absent rather than stubbed: it needs a pipeline that does not exist
-yet. A subcommand that parses and then apologises is worse than one that is not
-there, because it appears in ``--help`` as though it were a feature.
-
-``serve`` is present but currently needs ``--replay``: its live source is
-``GazeEstimator``, which is Phase 2. Replay is not a toy, it is the same wire
-format over the same transport, which is what makes the contract testable
-against ``gaze_test.html`` and the browser game today.
+``demo`` and the live path of ``serve`` both needed ``GazeEstimator``, which
+landed with Phase 2. ``serve --replay`` remains, because replaying recorded
+readings is how the wire format is tested without a camera.
 
 EXIT CODES
 ----------
@@ -211,6 +207,48 @@ def _cmd_calibrate(args: argparse.Namespace, out: TextIO) -> int:
         file=out,
     )
     return 1
+
+
+def _cmd_demo(args: argparse.Namespace, out: TextIO) -> int:
+    """Open the camera and print live readings until interrupted.
+
+    The quickest way to confirm the whole chain works on a given machine. Prints
+    rather than drawing a window: a preview needs a GUI toolkit, and the thing
+    worth confirming is that coordinates arrive and move.
+    """
+    from .capture import WebcamGazeTracker
+    from .types import GazeStatus
+
+    tracker = WebcamGazeTracker(profile=args.profile)
+    print(f"Camera {tracker.source.size[0]}x{tracker.source.size[1]}, "
+          f"provider {tracker.estimator.provider}. Ctrl+C to stop.", file=out)
+    if args.profile is None:
+        print("No profile given, so coordinates are unavailable: this reports "
+              "raw pitch and yaw only. Pass --profile NAME for screen positions.",
+              file=out)
+
+    seen = 0
+    try:
+        with tracker:
+            for result in tracker.stream():
+                seen += 1
+                if args.frames and seen > args.frames:
+                    break
+                if result.ok:
+                    print(f"  x={result.x:.4f} y={result.y:.4f} "
+                          f"dist={_fmt_cm(result.distance_cm)}", file=out)
+                elif result.status is GazeStatus.NOT_CALIBRATED:
+                    print(f"  pitch={result.pitch:+.4f} yaw={result.yaw:+.4f} rad "
+                          f"dist={_fmt_cm(result.distance_cm)}", file=out)
+                else:
+                    print(f"  {result.status.value}", file=out)
+    except KeyboardInterrupt:
+        print("\nStopped.", file=out)
+    return 0
+
+
+def _fmt_cm(value: float | None) -> str:
+    return "?" if value is None else f"{value:.0f}cm"
 
 
 def _cmd_serve(args: argparse.Namespace, out: TextIO) -> int:
@@ -499,6 +537,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="serve recorded [ok, x, y] readings from JSON instead of a camera",
     )
 
+    demo = sub.add_parser("demo", help="print live gaze readings from the camera")
+    demo.add_argument("--profile", help="calibration profile name")
+    demo.add_argument(
+        "--frames", type=int, default=0,
+        help="stop after N frames (0 runs until interrupted)",
+    )
+
     export = sub.add_parser("export-onnx", help="convert PyTorch L2CS weights to ONNX")
     export.add_argument(
         "--weights", default="L2CSNet_gaze360.pkl", help="the PyTorch checkpoint to convert"
@@ -532,6 +577,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         "calibrate": _cmd_calibrate,
         "export-onnx": _cmd_export_onnx,
         "serve": _cmd_serve,
+        "demo": _cmd_demo,
     }
     try:
         return handlers[args.command](args, stream)

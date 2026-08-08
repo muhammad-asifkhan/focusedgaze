@@ -18,10 +18,16 @@ this file records what changed, per phase.
   polynomial, One Euro filter, positioning gate); Tier 2 covers frames →
   (pitch, yaw), is gitignored, and is regenerable by anyone from their own
   recording.
-- **Phase 2 (in progress):** `core/filters.py` (`OneEuroFilter`,
-  `OneEuroFilter2D`) and `core/positioning.py` (`PositioningGate`,
-  `FocalCalibration`, `PositioningConfig`, `PositioningStatus`), both proven
-  equivalent to the legacy implementation within 1e-9.
+- **Phase 2:** the gaze pipeline, complete. `core/filters.py` and
+  `core/positioning.py` landed first, both proven equivalent to the legacy
+  implementation within 1e-9. `core/landmarks.py` (MediaPipe wrapper and the
+  smoothed square crop), `core/model.py` (ONNX session, provider selection and
+  the angle decode) and `core/estimator.py` (`GazeEstimator.process`) complete
+  it. The module-level `_smoothed_bbox` global is **gone**: crop smoothing is
+  instance state, so two estimators in one process no longer corrupt each
+  other's crops.
+- **Phase 2:** `WebcamGazeTracker` and the `demo` CLI command, both of which
+  were waiting on `GazeEstimator`. The CLI command set is now complete at six.
 - **Phase 3:** frozen configuration dataclasses (`CameraConfig`, `FilterConfig`,
   `LandmarkConfig`, `ModelConfig`, `PositioningConfig`, `RuntimeConfig` and the
   `GazeConfig` composite), the result types (`GazeResult`, `GazeStatus`) and the
@@ -51,8 +57,7 @@ this file records what changed, per phase.
   memory with no codec involved. The legacy server's dedicated capture thread
   is preserved, including its deliberate frame dropping: the slot holds one
   frame and a slow consumer jumps to the freshest rather than working through a
-  backlog. `WebcamGazeTracker` is **not** included; it composes a source with a
-  `GazeEstimator` and is gated on Phase 2.
+  backlog. `WebcamGazeTracker` was gated on Phase 2 and followed with it.
 - **Phase 6:** the CLI. `download-models`, `check`, `calibrate` and
   `export-onnx`; `serve` followed in Phase 7. `demo` is absent rather than
   stubbed, because it needs the pipeline. `check` turns most of `docs/troubleshooting.md` into one
@@ -127,6 +132,27 @@ this file records what changed, per phase.
   never executed.
 
 ### Verified
+- **The extraction reproduces the legacy pipeline BIT-IDENTICALLY.** The Tier 2
+  fixture replayed through both implementations in one process, on the same 60
+  real frames: 60/60 bit-identical, **0/60** crop bounding boxes differing, worst
+  pitch and yaw drift **0.000000e+00 rad**. Not "within the 1e-4 tolerance" — the
+  94x of headroom §48 measured was not consumed at all. `MIGRATION_AUDIT.md` §49.
+- **mediapipe 0.10.35 vs 1.0.0 measured on real frames**, which §32.3 recorded as
+  unmeasured and explicitly declined to assume. Same 60 frames replayed under
+  both interpreters: **0/60** crop boxes differ, worst drift 1.065e-06 rad, 94x
+  headroom. The bbox result is the one that answers §32.3, which named the
+  min/max crop geometry as the place a landmark difference would show first.
+  §32.3's guess that outputs would be bit-identical was **wrong** (2/60), and is
+  recorded as wrong. `MIGRATION_AUDIT.md` §48.
+- **The A3 isolation test exists and has teeth.** Two estimators in one process
+  do not interfere, driven hard enough to show the defect: twenty frames into one
+  estimator, one frame into another, first crop compared against a clean
+  reference. Plus a second test that `reset()` is local, because
+  `reset_bbox_smoothing()` was global in both directions.
+- **The golden harness now runs the SDK.** `_load_sdk` raised unconditionally
+  from Phase 1 until now, so every golden test measured the legacy code. Opening
+  it caught two harness defects that only worked because one implementation ran:
+  a private-attribute poke and an unnormalised return type. `MIGRATION_AUDIT.md` §49.2.
 - **The browser game plays against the minimal message, executed rather than
   inferred.** Audit §39 recorded that claim as read off the client and never run.
   The real, unmodified `input-manager.js` now runs under Node against a real

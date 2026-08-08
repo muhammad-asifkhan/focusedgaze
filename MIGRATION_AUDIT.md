@@ -3637,3 +3637,162 @@ against itself.**
 The harness reproduces the unmodified pipeline, and the tolerance is not being spent on an
 environment difference: 94x of headroom remains for the refactor to consume. `landmarks.py`,
 `model.py` and `estimator.py` can now be written against a baseline that means something.
+
+---
+
+# Section 49 - Phase 2 closed: the pipeline, and a drift of exactly zero
+
+## 49.1 The headline
+
+`core/landmarks.py`, `core/model.py` and `core/estimator.py` landed, and the Tier 2 fixture
+was replayed through **both** implementations in one process, on the same frames, in the
+same environment:
+
+| Quantity | legacy vs SDK |
+|---|---|
+| faces detected | 60/60 in both, no disagreement |
+| crop bounding boxes differing | **0 / 60** |
+| worst pitch delta | **0.000000e+00 rad** |
+| worst yaw delta | **0.000000e+00 rad** |
+| frames bit-identical | **60 / 60** |
+
+Not "within the 1e-4 tolerance". **Bit-identical on every frame.** The 94x of headroom
+section 48 measured was not consumed at all.
+
+Both were also replayed against the fixture's recorded expectations separately, which is
+what the test suite does:
+
+    legacy: worst drift 0.000000e+00 rad over 60 frames
+    sdk   : worst drift 0.000000e+00 rad over 60 frames
+
+The same-process comparison is the one that means something about the refactor. Comparing
+each against the manifest leaves the recording environment in the picture; comparing them
+against each other in one interpreter removes it, so a zero there is attributable to the
+code and nothing else.
+
+## 49.2 The line that had kept the SDK unexercised since Phase 1
+
+`tests/golden/adapters.py::_load_sdk` ended in:
+
+    raise ImplUnavailable("focusedgaze core is a Phase 2 stub")
+
+unconditionally. Every golden test therefore ran against the **legacy** implementation and
+skipped or fell back for the SDK, from Phase 1 until now. The fixtures proved the harness
+worked; they said nothing about the extraction. That is now the number in 49.1.
+
+Opening it immediately paid for itself by finding two things in the harness that only ever
+worked because one implementation was running:
+
+**The Tier 1 positioning test poked a private attribute.** It set `gate._focal_override`
+directly, which exists only on the legacy gate; the SDK's has `__slots__` and made the
+failure loud. That poke is a legitimate necessity for the legacy gate, which loads its focal
+length from a file at construction (finding F1: the answer depended on the working
+directory), so it moved into the adapter behind `make_gate(focal_override)`. The SDK builds
+the same gate through its ordinary constructor, because Phase 2 made the focal length an
+explicit argument for exactly this reason. **One test body, one question, two
+implementations.**
+
+**The gate's return type differs, legitimately.** Legacy returns a dict, the SDK a frozen
+dataclass. That is a better type and not a behaviour change, so the adapter normalises it
+rather than the SDK degrading to match. Both are asserted against the same recorded numbers.
+
+## 49.3 The global is gone, and A3 finally has teeth
+
+`gaze_pipeline.py:35` kept the crop's smoothing in a module-level `_smoothed_bbox`, cleared
+through a module-level `reset_bbox_smoothing()`. Two estimators in one process shared one
+bounding box and corrupted each other's crops, and the only way to start clean was a reset
+every other user in the process also felt.
+
+It is now `SmoothedBox`, owned by a `FaceLandmarker` instance. The arithmetic is byte-identical;
+only ownership moved, which is what 49.1 demonstrates.
+
+The A3 test the standing brief has carried since Phase 0 is written and is driven hard
+enough to actually show the defect: one estimator is fed **twenty** frames of a face in the
+top-left, moving its smoothed box a long way, while a second is fed a single frame of a face
+in the bottom-right. Its first crop is compared against a clean estimator's. Under the old
+global the second estimator's very first crop would have been dragged toward the first's box.
+A second test pins that `reset()` is local too, because `reset_bbox_smoothing()` was global
+in both directions.
+
+## 49.4 Both carried defects, and why they are carried
+
+**The output tensor names lie.** The graph names output 0 `pitch_bins`; it holds **yaw**.
+L2CS-Net's `forward()` returns yaw first and the export labelled it wrongly, and labels are
+strings attached at export time that do not change tensor contents. The legacy decode
+unpacked in the true order and so does this. Pinned by a test whose two peaks sit at
+different bins, so a swap is unambiguous rather than a plausible-looking number.
+
+**The angle is a softmax-weighted expectation, not an argmax.** Section 7 described it as an
+argmax once and was corrected. The distinction is pinned three ways:
+
+| Case | Expectation | An argmax |
+|---|---|---|
+| bimodal, peaks at bins 20 and 60 | -20 deg, the weighted mean | -100 or +60, whichever wins the tie |
+| logits nudged by 1e-4 | moves < 0.1 deg | can jump a full 4-degree bin |
+| sharp peak at the extreme bin | pulled strictly inward | lands exactly on the limit |
+
+The third was found by writing the control test wrongly. It asserted -180.0 for a peak at
+bin 0, and failed, because a Gaussian centred on bin 0 has no mass to its left so the mean
+cannot reach the limit. The first draft was **asserting argmax behaviour by accident**, and
+the corrected version is now a third discriminator rather than a control.
+
+Section 48 depends on this smoothness: the 1e-06 rad residual between two ONNX providers is
+only that small because a perturbation moves a weighted mean slightly instead of flipping a
+maximum. An argmax would have made the Tier 2 tolerance impossible to choose.
+
+## 49.5 The no-I/O constraint is enforced, not asserted
+
+A missing model raises `ModelNotFoundError` naming the command that fetches it. The test
+does not merely check the exception: it replaces **every** download entry point in
+`assets.download` with something that fails the test if called at all, then constructs the
+model. A silent fetch would break the no-network guarantee that lets this layer run in CI,
+and for the gaze weights specifically it would breach the licence position in NOTICE.
+
+Writing that test walked straight into the shadowing defect recorded in 40.3:
+`from focusedgaze.assets import download` binds the **function**, not the submodule, because
+`assets/__init__` re-exports a callable of that name over its own module. The test now goes
+through `sys.modules`, the one spelling that cannot be shadowed, with the reason at the
+import. The trap is still live and still an open API question.
+
+## 49.6 A circular import, and why the fix is lazy exports
+
+`config.py` imports `PositioningConfig` from `core.positioning`, and `estimator.py` imports
+`GazeConfig` back from `config`. Importing the estimator eagerly in `core/__init__.py`
+closed that loop and failed at import time with a partially initialised module.
+
+Resolved with PEP 562 lazy attribute access rather than by moving either type. The second
+benefit is larger than the first: `import focusedgaze.config` no longer pays for MediaPipe,
+which costs seconds and loads native libraries that a caller reading config types never
+needs. `__all__` is written out as a literal rather than derived from the lookup table,
+because a computed `__all__` is invisible to static tools; a test asserts the two agree.
+
+## 49.7 What else this unblocked
+
+`WebcamGazeTracker` and `focusedgaze demo` both existed only as stubs waiting on the
+estimator. Both landed, and the command set is now complete at six.
+
+The tracker is deliberately thin, and two decisions in it are worth recording:
+
+- **Mirroring happens here**, not in the capture layer. Capture publishes frames as the
+  camera delivered them because a shared frame has consumers that disagree about handedness;
+  the tracker is the layer that knows the frames are going to a gaze estimator. It is not
+  cosmetic: the calibration was fitted through a mirrored preview, so an unmirrored frame
+  does not mirror the output, it makes the mapping wrong.
+- **Ownership decides teardown.** A source the tracker opened is released; a source handed in
+  by the caller is not. Releasing a camera the application is still using is worse than
+  leaking one.
+
+## 49.8 Coverage
+
+**86% overall.** `core/model.py` 95%, `core/estimator.py` 89%, `capture/tracker.py` 85%.
+`core/landmarks.py` sits at 58%, and the uncovered half is the MediaPipe graph construction
+and the detect path, which need the real landmarker: those lines are exercised by the Tier 2
+replay, which is `hardware`-marked and excluded from the default run. That is the honest
+reading rather than a gap to paper over.
+
+## 49.9 Phase 2 is closed
+
+Every gate condition in Part D is met: the Tier 2 fixture exists and replays against the
+unmodified pipeline (section 48), the global is gone with the A3 test proving it, the
+provider fallback logs exactly one line naming what loaded, the decode is pinned, and the
+extraction reproduces the legacy pipeline bit-identically on 60 real frames.
