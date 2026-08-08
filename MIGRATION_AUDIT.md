@@ -3535,3 +3535,105 @@ absence of one line: a source is released exactly once, on every exit path inclu
 exception, and reading afterwards ends the stream instead of raising. That is the same
 property Phase 4 established, restated here because R-12 is where it was originally missing
 and a future refactor that reintroduced a server-owned handle would need to fail loudly.
+
+---
+
+# Section 48 - Section 32.3 measured at last: mediapipe 0.10.35 against 1.0.0 on real frames
+
+## 48.1 What 32.3 asked for, and why it could not be answered then
+
+Section 32.3 established that the two environments run different mediapipe builds, that the
+**API surface is identical**, that the `.task` asset is byte-identical, and that the native
+engine was nevertheless rebuilt (28.7 MB against 43.3 MB, different digest, an Abseil bump
+and a compiler change).
+
+It then said plainly what it could not establish:
+
+> **What was NOT established: whether landmark outputs are numerically identical.** The A/B
+> needs an image containing a face; the only candidate image in the tree detects no face
+> under either version, and no Tier 2 fixture exists yet. **This is recorded as unmeasured
+> rather than assumed.** Bit-identical output is plausible but unproven, and the crop
+> geometry is a min/max over the full landmark set, which is more sensitive to a single
+> moved outlier landmark than an average would be.
+
+Tier 2 now exists: 60 frames, 60/60 with a face, settled at 52.6/255, digest `11895d83`.
+So the measurement is finally possible.
+
+## 48.2 The measurement, run rather than inferred
+
+The **same** 60 frames were replayed through the **unmodified** legacy pipeline under both
+interpreters, and the per-frame outputs diffed. Both environments were confirmed from
+inside the run rather than from a manifest:
+
+| | legacy `gaze_env` | SDK `.venv` |
+|---|---|---|
+| mediapipe | **0.10.35** | **1.0.0** |
+| ONNX provider | **DmlExecutionProvider** (directml 1.24.4) | **CPUExecutionProvider** (onnxruntime 1.28.0) |
+| numpy / opencv | 2.5.1 / 5.0.0.93 | 2.5.1 / 5.0.0.93 |
+
+Result over all 60 frames:
+
+| Quantity | Value |
+|---|---|
+| faces detected | **60/60 in both**, no disagreement on any frame |
+| worst pitch delta | **7.989483e-07 rad** (4.578e-05 deg) |
+| worst yaw delta | **1.065264e-06 rad** (6.104e-05 deg) |
+| headroom under the 1e-4 tolerance | **94x** |
+| **crop bounding boxes differing** | **0 / 60** |
+| angle outputs bit-identical | 2 / 60 |
+
+## 48.3 The bbox result is the one that answers 32.3
+
+The angles are **not** bit-identical, and 32.3's guess that they might be was wrong. But
+the number that answers its actual concern is the crop geometry: **zero of sixty bounding
+boxes differ.**
+
+32.3 named that as the sensitive path precisely because it is a min/max over the full
+landmark set, so a single outlier landmark moving by one pixel would change the crop and be
+visible. Across 60 real frames it never happened. The integer crop box the model is fed is
+identical under both mediapipe builds.
+
+That is a stronger statement than the tolerance passing. It means the landmark stage
+contributes **nothing measurable** to the divergence, and it does so at the exact point
+32.3 identified as most likely to show a difference.
+
+## 48.4 What the residual 1e-06 is, and what it is not
+
+The A/B changes mediapipe **and** the ONNX provider at once, so the deltas cannot be
+attributed to mediapipe on their own. They do not need to be, because 32.2 already measured
+the provider difference in isolation on synthetic tensors: 5.33e-07 rad pitch, 2.66e-07 rad
+yaw.
+
+The figures here, 7.99e-07 and 1.07e-06, are the same order of magnitude as that
+provider-only measurement. Combined with identical crop boxes, the reading is:
+
+- the landmark stage is identical, evidenced directly by the bboxes;
+- the residual comes from ONNX float arithmetic on a different provider, which 32.2 already
+  characterised as float32 rounding in the bin-weighted sum rather than algorithmic
+  divergence.
+
+32.2 also explains why this stays small rather than jumping: the decode is a
+**probability-weighted expectation over 90 bins, which is smooth**. A hard argmax would be
+discontinuous and could jump a full 4-degree bin on a near-tie. That property is now load
+bearing twice over, and it is why `core/model.py` must not be "simplified" into an argmax.
+
+## 48.5 A gap this exposed in the fixture format
+
+The manifest recorded when, how bright, how many faces and the digest, but **not which
+libraries produced it**. So the artifact could not answer "was this recorded under 0.10.35
+or 1.0.0", and the only way to establish the cross-environment claim was to replay under
+both interpreters and diff, which is what 48.2 is.
+
+That is a real gap: a replay compares an environment against a recording, and half of that
+comparison was unrecorded. `record_tier2.py` now stamps an `environment` block with the
+interpreter and the packages section 32 identified as diverging. Fixtures recorded before
+this change do not carry it, and the loader does not require it.
+
+**A fixture that does not record the environment that produced it can only ever be compared
+against itself.**
+
+## 48.6 Consequence: the Phase 2 gate is open
+
+The harness reproduces the unmodified pipeline, and the tolerance is not being spent on an
+environment difference: 94x of headroom remains for the refactor to consume. `landmarks.py`,
+`model.py` and `estimator.py` can now be written against a baseline that means something.

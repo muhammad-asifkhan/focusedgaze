@@ -56,6 +56,31 @@ def sha256_of(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
+def _environment() -> dict[str, str]:
+    """The interpreter and the libraries a replay can legitimately differ on.
+
+    Only the ones section 32 measured as diverging between the two environments,
+    plus the interpreter. Recording the whole freeze would be noise; recording
+    nothing is what made section 48 expensive.
+    """
+    import importlib.metadata as md
+
+    def version(name: str) -> str:
+        try:
+            return md.version(name)
+        except Exception:  # noqa: BLE001 - absent is a legitimate answer here
+            return "absent"
+
+    return {
+        "python": sys.version.split()[0],
+        "mediapipe": version("mediapipe"),
+        "onnxruntime": version("onnxruntime"),
+        "onnxruntime-directml": version("onnxruntime-directml"),
+        "numpy": version("numpy"),
+        "opencv-python": version("opencv-python"),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--frames", type=int, default=60, help="frames to keep (default 60)")
@@ -215,6 +240,13 @@ def main(argv: list[str] | None = None) -> int:
             "face_rate": round(face_rate, 3),
             "frame_shape": list(frames[0].shape),
             "mirrored": True,
+            # The interpreter and the two libraries audit section 32 identified as
+            # diverging between the SDK and legacy environments. Stamped because
+            # a replay compares an environment against a recording, and without
+            # this the recording's half is unknowable from the artifact: section
+            # 48 had to re-derive it by replaying under both interpreters, which
+            # is work nobody should repeat.
+            "environment": _environment(),
             "frames_file": frames_path.name,
             "frames_sha256": sha256_of(frames_path),
             "expected": expected,
