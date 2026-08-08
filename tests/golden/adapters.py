@@ -127,6 +127,19 @@ def _load_legacy() -> dict[str, Any]:
                 )
             )
 
+        def make_gate(focal_override: tuple[float, int] | None) -> Any:
+            """A gate with the fixture's focal context applied.
+
+            The legacy gate loads its focal length from a file at construction
+            (audit F1: the answer depended on the process working directory), so
+            the only way to pin it is to overwrite the private attribute it
+            cached. That poke lives here rather than in the test, so the test can
+            ask both implementations the same question.
+            """
+            gate = positioning_gate.PositioningGate()
+            gate._focal_override = tuple(focal_override) if focal_override else None
+            return gate
+
         return {
             "name": "legacy",
             "apply_calibration": lambda p, y: calibration_utils.apply_calibration(model, p, y),
@@ -134,6 +147,9 @@ def _load_legacy() -> dict[str, Any]:
             "positioning": positioning_gate,
             "pipeline": gaze_pipeline,          # Tier 2: frames -> (pitch, yaw)
             "make_landmarker": make_landmarker,
+            "make_gate": make_gate,
+            # The legacy gate already returns a mapping.
+            "gate_fields": dict,
         }
     except (ImplUnavailable, FixtureModelMismatch):
         # FixtureModelMismatch must NOT be swallowed into ImplUnavailable below.
@@ -146,13 +162,112 @@ def _load_legacy() -> dict[str, Any]:
         os.chdir(prev)
 
 
+class _SdkPipeline:
+    """The legacy pipeline's shape, backed by the SDK's own core.
+
+    The Tier 2 test drives `reset_bbox_smoothing()` and
+    `get_gaze_reading(frame, landmarker, index)`, which is the legacy module's
+    surface. Presenting the same shape here is what lets **one** test body
+    replay the **same** fixture through both implementations, so the two numbers
+    it produces are comparable rather than merely both green.
+
+    The crop smoothing lives on the landmarker instance now, not on this object,
+    which is the Phase 2 change. `reset_bbox_smoothing` therefore resets whatever
+    landmarker was handed to it most recently.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+        self._landmarker: Any = None
+
+    def reset_bbox_smoothing(self) -> None:
+        if self._landmarker is not None:
+            self._landmarker.reset()
+
+    def get_gaze_reading(
+        self, frame: Any, landmarker: Any, frame_idx: int
+    ) -> tuple[float | None, float | None, tuple[int, int, int, int] | None]:
+        self._landmarker = landmarker
+        observation = landmarker.detect(frame)
+        if observation is None:
+            return None, None, None
+        crop = landmarker.crop(frame, observation.bbox)
+        if crop is None:
+            return None, None, None
+        pitch, yaw = self._model.predict(crop)
+        return pitch, yaw, observation.bbox
+
+
 def _load_sdk() -> dict[str, Any]:
-    """Import the new package. Not available until Phase 2."""
+    """Import the new package and present it in the harness's shape.
+
+    Phase 2 opened this path. It previously raised unconditionally, which is why
+    the SDK side of Tier 2 went unexercised from Phase 1 until now: the fixture
+    only ever replayed through the legacy code, so it proved the harness worked
+    and said nothing about the extraction.
+
+    The model files come from the **legacy checkout**, deliberately. Both
+    implementations must be fed byte-identical weights or the comparison
+    measures the assets rather than the code, and the managed cache is empty on
+    a machine that has never run `download-models`.
+    """
     try:
-        from focusedgaze.core import filters, positioning  # noqa: F401
+        from focusedgaze.calibration.profile import migrate_pickle
+        from focusedgaze.config import LandmarkConfig, ModelConfig
+        from focusedgaze.core import positioning
+        from focusedgaze.core.filters import OneEuroFilter
+        from focusedgaze.core.landmarks import FaceLandmarker
+        from focusedgaze.core.model import GazeModel
     except ImportError as exc:
-        raise ImplUnavailable(f"focusedgaze core not implemented yet: {exc}") from exc
-    raise ImplUnavailable("focusedgaze core is a Phase 2 stub")
+        raise ImplUnavailable(f"focusedgaze core not importable: {exc}") from exc
+
+    profile = migrate_pickle(_calibration_model_path(), name="golden")
+
+    landmarker_asset = LEGACY_DIR / "face_landmarker.task"
+    gaze_asset = LEGACY_DIR / "models" / "l2cs_gaze360.onnx"
+
+    def make_landmarker() -> Any:
+        if not landmarker_asset.is_file():
+            raise ImplUnavailable(f"landmarker asset not at {landmarker_asset}")
+        return FaceLandmarker(landmarker_asset, config=LandmarkConfig())
+
+    pipeline: Any = None
+    if gaze_asset.is_file():
+        pipeline = _SdkPipeline(GazeModel(gaze_asset, config=ModelConfig()))
+
+    def make_gate(focal_override: tuple[float, int] | None) -> Any:
+        """The same gate, built the way the SDK intends.
+
+        No private attribute: Phase 2 made the focal length an explicit argument
+        precisely because the implicit file lookup produced 117.4 cm or 121.2 cm
+        for identical landmarks depending on the launch directory.
+        """
+        from focusedgaze.core.positioning import FocalCalibration, PositioningGate
+
+        focal = None
+        if focal_override:
+            focal = FocalCalibration(float(focal_override[0]), int(focal_override[1]))
+        return PositioningGate(focal=focal)
+
+    return {
+        "name": "sdk",
+        "apply_calibration": profile.apply,
+        "OneEuro": OneEuroFilter,
+        "positioning": positioning,
+        "pipeline": pipeline,          # None without the weights; Tier 2 skips
+        "make_landmarker": make_landmarker,
+        "make_gate": make_gate,
+        # Phase 2 returns a frozen dataclass rather than a dict, which is a
+        # better type and not a behaviour change. Normalised here so one test
+        # body can ask both implementations the same question.
+        "gate_fields": lambda st: {
+            "distance_cm": st.distance_cm,
+            "distance_ok": st.distance_ok,
+            "centered": st.centered,
+            "in_zone": st.in_zone,
+            "zone": st.zone,
+        },
+    }
 
 
 _CACHE: dict[str, Any] | None = None

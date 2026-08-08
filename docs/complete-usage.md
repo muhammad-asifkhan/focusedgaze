@@ -119,9 +119,9 @@ number of outliers dropped, and both the fit and held-out errors.
 `--migrate` converts a legacy pickled calibration into the JSON format. Keep the
 JSON: it loads without scikit-learn and does not execute code on load.
 
-**Interactive capture (following a moving dot) is [PLANNED].** It needs
-`GazeEstimator`, which is Phase 2. Running `focusedgaze calibrate` with no action
-says so and lists what does work rather than pretending.
+**Interactive capture (following a moving dot) is still [PLANNED].** The pipeline it
+needs now exists, but the on-screen routine (`calibration/ui.py`) does not. Running
+`focusedgaze calibrate` with no action says so and lists what does work.
 
 Calibration is **per person, per machine, and per seating position**. It is the
 file the whole system depends on. Move the laptop, change chairs, or swap users,
@@ -167,15 +167,24 @@ against a reading a full window earlier rather than the previous frame. A camera
 takes several seconds to open up, and a check that sampled immediately would
 report a dark room on a well-lit one.
 
-### 3.4 `focusedgaze demo` **[PLANNED]**
+### 3.4 `focusedgaze demo` **[SHIPPED]**
 
-A live preview window with a dot following your eyes. **Inputs:** a calibrated
-profile and a camera. **Outputs:** a window. The quickest way to confirm the
-whole chain works.
+```bash
+focusedgaze demo --profile alice        # Ctrl+C to stop
+focusedgaze demo --frames 60            # stop after N frames
+```
+
+**Inputs:** a camera, and optionally a calibration profile. **Outputs:** live
+readings **printed to the terminal**, not a preview window: a window needs a GUI
+toolkit, and the thing worth confirming is that coordinates arrive and move.
+
+Without `--profile` it reports raw pitch and yaw, which is still enough to see
+that the camera, the landmarker and the gaze model are all working. The quickest
+way to confirm the whole chain on a new machine.
 
 ---
 
-## 4. The pure API **[PLANNED]**
+## 4. The pure API **[SHIPPED]**
 
 The layer that makes this a library rather than an application.
 
@@ -278,7 +287,7 @@ smoothing lived in a module-level global, so two consumers corrupted each other.
 
 ---
 
-## 5. The convenience API **[PLANNED]**
+## 5. The convenience API **[SHIPPED]**
 
 ```python
 from focusedgaze import WebcamGazeTracker
@@ -516,11 +525,11 @@ Then ten lines of Python, as in section 4.
 | One Euro filter, positioning gate | **[SHIPPED]** |
 | Asset registry and downloader | **[SHIPPED]** |
 | Calibration | **[SHIPPED]** |
-| `GazeEstimator`, landmarks, ONNX model | **[PLANNED]** |
+| `GazeEstimator`, landmarks, ONNX model | **[SHIPPED]**, bit-identical to the original on 60 frames |
 | Capture layer (`WebcamSource`, video and sequence sources) | **[SHIPPED]** |
-| `WebcamGazeTracker` | **[PLANNED]**, needs the pipeline |
+| `WebcamGazeTracker` | **[SHIPPED]** |
 | CLI: `download-models`, `check`, `calibrate`, `export-onnx` | **[SHIPPED]** |
-| CLI: `serve`, `demo` | **[PLANNED]** |
+| CLI: `serve`, `demo` | **[SHIPPED]** |
 | WebSocket server | **[SHIPPED]**, verified against the real browser client |
 
 For what runs today with executed examples, see [usage.md](usage.md). That

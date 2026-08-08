@@ -3,13 +3,14 @@
 Webcam eye-gaze tracking as a Python library. Point a laptop camera at a face and get a
 screen coordinate.
 
-> **Status: in development (0.0.0).** Implemented and tested: configuration, result types,
-> the exception tree, the One Euro filter, the positioning gate, the model registry and
-> downloader, calibration, the capture layer, the WebSocket server, and five of the six CLI commands
-> (`download-models`, `check`, `calibrate`, `export-onnx`, `serve`). **Not yet written**:
-> the gaze pipeline itself, `WebcamGazeTracker`, and `demo`. The API shown below is the agreed
-> contract, not working code, and every block that describes it is marked. Do not depend on
-> this release. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) for what has actually landed.
+> **Status: the pipeline is complete (0.0.0).** `GazeEstimator`, `WebcamGazeTracker`, the
+> capture layer, calibration, the asset registry, the WebSocket server and all six CLI
+> commands are implemented and tested. The extraction reproduces the original pipeline
+> **bit-identically** on 60 recorded frames: 60/60 identical, zero crop-box differences.
+> See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) §49.
+>
+> Still 0.0.0 and not yet released as a functional package: packaging verification and the
+> release are Phases 9 and 10.
 >
 > If something is not working, run `focusedgaze check --no-camera` first.
 >
@@ -68,9 +69,8 @@ pip install focusedgaze[cpu]        # anywhere
 Pick one. The base install is deliberately provider-agnostic: focusedgaze does not choose
 an ONNX execution provider for you, because the right choice depends on hardware it cannot
 see. Installing the base package with no provider extra still imports cleanly, which CI
-checks on every run. Reporting a missing provider as a named error rather than a bare
-`ImportError` is the agreed design, but the model loader does not exist yet, so today there
-is nothing to raise it.
+checks on every run. A missing provider is reported as a named `ProviderError` naming the
+extras that fix it, never as a bare `ImportError`.
 
 The provider is worth getting right. On the reference machine, an RTX 4060 running Windows,
 the gaze model takes about 15 ms per frame through DirectML and about 104 ms on CPU. That
@@ -81,42 +81,34 @@ Other extras: `[calibration]` to fit a profile, `[server]` for the WebSocket bri
 
 Python 3.12–3.14. Tested on 3.12, 3.13 and 3.14 in CI.
 
-## What works today
+## The API
 
-The filter and the positioning gate are extracted, tested against the original
-implementation, and usable now:
-
-```python
-from focusedgaze.core.filters import OneEuroFilter2D
-
-# Smooths a jittery 2D signal. Defaults match the deployed system.
-f = OneEuroFilter2D(min_cutoff=0.7, beta=0.6, d_cutoff=1.0)
-
-for x, y, t in [(0.50, 0.50, 0.00), (0.55, 0.48, 0.03), (0.52, 0.51, 0.07)]:
-    sx, sy = f.filter(x, y, t)
-    print(f"{sx:.4f} {sy:.4f}")
-```
-
-`focusedgaze.core.positioning` provides `PositioningGate`, which tells you whether a face is
-close enough, far enough, and centred enough to give a usable reading. It works on
-MediaPipe landmarks without needing the gaze model.
-
-## The intended API
-
-> **None of this runs yet.** It is the contract Phase 2 through Phase 4 are being built
-> against, shown here so the shape can be reviewed rather than discovered late.
+Two layers. You still need the model weights and a calibration, as described above.
 
 ```python
-# Pure: you supply frames. No camera, no I/O, testable anywhere.
-est = GazeEstimator(profile=CalibrationProfile.load("default"))
+from focusedgaze import GazeEstimator, WebcamGazeTracker, CalibrationProfile
+
+# Pure: you supply frames. No camera, no network, testable anywhere.
+est = GazeEstimator(profile=CalibrationProfile.load("alice"))
 result = est.process(frame_bgr, timestamp=t)
+if result.ok:
+    print(result.x, result.y)
 
-# Convenience: it owns the webcam.
-with WebcamGazeTracker(profile="default") as tracker:
+# Convenience: it owns the webcam and always gives it back.
+with WebcamGazeTracker(profile="alice") as tracker:
     for result in tracker.stream():
         if result.ok:
             print(result.x, result.y)
 ```
+
+`GazeEstimator` never reaches the network: a missing model raises with the command that
+fetches it rather than downloading anything, which is what lets the whole pipeline run in
+CI against a recorded fixture.
+
+Smaller pieces are usable on their own. `focusedgaze.core.filters.OneEuroFilter2D` smooths
+any jittery 2D signal, and `focusedgaze.core.positioning.PositioningGate` reports whether a
+face is close enough, far enough and centred enough, working on MediaPipe landmarks without
+the gaze model.
 
 The pure path is the point of the design. Anything that already has frames can use this
 library: a video file, another capture library, a camera shared with a hand tracker, or a

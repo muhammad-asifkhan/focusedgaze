@@ -3535,3 +3535,264 @@ absence of one line: a source is released exactly once, on every exit path inclu
 exception, and reading afterwards ends the stream instead of raising. That is the same
 property Phase 4 established, restated here because R-12 is where it was originally missing
 and a future refactor that reintroduced a server-owned handle would need to fail loudly.
+
+---
+
+# Section 48 - Section 32.3 measured at last: mediapipe 0.10.35 against 1.0.0 on real frames
+
+## 48.1 What 32.3 asked for, and why it could not be answered then
+
+Section 32.3 established that the two environments run different mediapipe builds, that the
+**API surface is identical**, that the `.task` asset is byte-identical, and that the native
+engine was nevertheless rebuilt (28.7 MB against 43.3 MB, different digest, an Abseil bump
+and a compiler change).
+
+It then said plainly what it could not establish:
+
+> **What was NOT established: whether landmark outputs are numerically identical.** The A/B
+> needs an image containing a face; the only candidate image in the tree detects no face
+> under either version, and no Tier 2 fixture exists yet. **This is recorded as unmeasured
+> rather than assumed.** Bit-identical output is plausible but unproven, and the crop
+> geometry is a min/max over the full landmark set, which is more sensitive to a single
+> moved outlier landmark than an average would be.
+
+Tier 2 now exists: 60 frames, 60/60 with a face, settled at 52.6/255, digest `11895d83`.
+So the measurement is finally possible.
+
+## 48.2 The measurement, run rather than inferred
+
+The **same** 60 frames were replayed through the **unmodified** legacy pipeline under both
+interpreters, and the per-frame outputs diffed. Both environments were confirmed from
+inside the run rather than from a manifest:
+
+| | legacy `gaze_env` | SDK `.venv` |
+|---|---|---|
+| mediapipe | **0.10.35** | **1.0.0** |
+| ONNX provider | **DmlExecutionProvider** (directml 1.24.4) | **CPUExecutionProvider** (onnxruntime 1.28.0) |
+| numpy / opencv | 2.5.1 / 5.0.0.93 | 2.5.1 / 5.0.0.93 |
+
+Result over all 60 frames:
+
+| Quantity | Value |
+|---|---|
+| faces detected | **60/60 in both**, no disagreement on any frame |
+| worst pitch delta | **7.989483e-07 rad** (4.578e-05 deg) |
+| worst yaw delta | **1.065264e-06 rad** (6.104e-05 deg) |
+| headroom under the 1e-4 tolerance | **94x** |
+| **crop bounding boxes differing** | **0 / 60** |
+| angle outputs bit-identical | 2 / 60 |
+
+## 48.3 The bbox result is the one that answers 32.3
+
+The angles are **not** bit-identical, and 32.3's guess that they might be was wrong. But
+the number that answers its actual concern is the crop geometry: **zero of sixty bounding
+boxes differ.**
+
+32.3 named that as the sensitive path precisely because it is a min/max over the full
+landmark set, so a single outlier landmark moving by one pixel would change the crop and be
+visible. Across 60 real frames it never happened. The integer crop box the model is fed is
+identical under both mediapipe builds.
+
+That is a stronger statement than the tolerance passing. It means the landmark stage
+contributes **nothing measurable** to the divergence, and it does so at the exact point
+32.3 identified as most likely to show a difference.
+
+## 48.4 What the residual 1e-06 is, and what it is not
+
+The A/B changes mediapipe **and** the ONNX provider at once, so the deltas cannot be
+attributed to mediapipe on their own. They do not need to be, because 32.2 already measured
+the provider difference in isolation on synthetic tensors: 5.33e-07 rad pitch, 2.66e-07 rad
+yaw.
+
+The figures here, 7.99e-07 and 1.07e-06, are the same order of magnitude as that
+provider-only measurement. Combined with identical crop boxes, the reading is:
+
+- the landmark stage is identical, evidenced directly by the bboxes;
+- the residual comes from ONNX float arithmetic on a different provider, which 32.2 already
+  characterised as float32 rounding in the bin-weighted sum rather than algorithmic
+  divergence.
+
+32.2 also explains why this stays small rather than jumping: the decode is a
+**probability-weighted expectation over 90 bins, which is smooth**. A hard argmax would be
+discontinuous and could jump a full 4-degree bin on a near-tie. That property is now load
+bearing twice over, and it is why `core/model.py` must not be "simplified" into an argmax.
+
+## 48.5 A gap this exposed in the fixture format
+
+The manifest recorded when, how bright, how many faces and the digest, but **not which
+libraries produced it**. So the artifact could not answer "was this recorded under 0.10.35
+or 1.0.0", and the only way to establish the cross-environment claim was to replay under
+both interpreters and diff, which is what 48.2 is.
+
+That is a real gap: a replay compares an environment against a recording, and half of that
+comparison was unrecorded. `record_tier2.py` now stamps an `environment` block with the
+interpreter and the packages section 32 identified as diverging. Fixtures recorded before
+this change do not carry it, and the loader does not require it.
+
+**A fixture that does not record the environment that produced it can only ever be compared
+against itself.**
+
+## 48.6 Consequence: the Phase 2 gate is open
+
+The harness reproduces the unmodified pipeline, and the tolerance is not being spent on an
+environment difference: 94x of headroom remains for the refactor to consume. `landmarks.py`,
+`model.py` and `estimator.py` can now be written against a baseline that means something.
+
+---
+
+# Section 49 - Phase 2 closed: the pipeline, and a drift of exactly zero
+
+## 49.1 The headline
+
+`core/landmarks.py`, `core/model.py` and `core/estimator.py` landed, and the Tier 2 fixture
+was replayed through **both** implementations in one process, on the same frames, in the
+same environment:
+
+| Quantity | legacy vs SDK |
+|---|---|
+| faces detected | 60/60 in both, no disagreement |
+| crop bounding boxes differing | **0 / 60** |
+| worst pitch delta | **0.000000e+00 rad** |
+| worst yaw delta | **0.000000e+00 rad** |
+| frames bit-identical | **60 / 60** |
+
+Not "within the 1e-4 tolerance". **Bit-identical on every frame.** The 94x of headroom
+section 48 measured was not consumed at all.
+
+Both were also replayed against the fixture's recorded expectations separately, which is
+what the test suite does:
+
+    legacy: worst drift 0.000000e+00 rad over 60 frames
+    sdk   : worst drift 0.000000e+00 rad over 60 frames
+
+The same-process comparison is the one that means something about the refactor. Comparing
+each against the manifest leaves the recording environment in the picture; comparing them
+against each other in one interpreter removes it, so a zero there is attributable to the
+code and nothing else.
+
+## 49.2 The line that had kept the SDK unexercised since Phase 1
+
+`tests/golden/adapters.py::_load_sdk` ended in:
+
+    raise ImplUnavailable("focusedgaze core is a Phase 2 stub")
+
+unconditionally. Every golden test therefore ran against the **legacy** implementation and
+skipped or fell back for the SDK, from Phase 1 until now. The fixtures proved the harness
+worked; they said nothing about the extraction. That is now the number in 49.1.
+
+Opening it immediately paid for itself by finding two things in the harness that only ever
+worked because one implementation was running:
+
+**The Tier 1 positioning test poked a private attribute.** It set `gate._focal_override`
+directly, which exists only on the legacy gate; the SDK's has `__slots__` and made the
+failure loud. That poke is a legitimate necessity for the legacy gate, which loads its focal
+length from a file at construction (finding F1: the answer depended on the working
+directory), so it moved into the adapter behind `make_gate(focal_override)`. The SDK builds
+the same gate through its ordinary constructor, because Phase 2 made the focal length an
+explicit argument for exactly this reason. **One test body, one question, two
+implementations.**
+
+**The gate's return type differs, legitimately.** Legacy returns a dict, the SDK a frozen
+dataclass. That is a better type and not a behaviour change, so the adapter normalises it
+rather than the SDK degrading to match. Both are asserted against the same recorded numbers.
+
+## 49.3 The global is gone, and A3 finally has teeth
+
+`gaze_pipeline.py:35` kept the crop's smoothing in a module-level `_smoothed_bbox`, cleared
+through a module-level `reset_bbox_smoothing()`. Two estimators in one process shared one
+bounding box and corrupted each other's crops, and the only way to start clean was a reset
+every other user in the process also felt.
+
+It is now `SmoothedBox`, owned by a `FaceLandmarker` instance. The arithmetic is byte-identical;
+only ownership moved, which is what 49.1 demonstrates.
+
+The A3 test the standing brief has carried since Phase 0 is written and is driven hard
+enough to actually show the defect: one estimator is fed **twenty** frames of a face in the
+top-left, moving its smoothed box a long way, while a second is fed a single frame of a face
+in the bottom-right. Its first crop is compared against a clean estimator's. Under the old
+global the second estimator's very first crop would have been dragged toward the first's box.
+A second test pins that `reset()` is local too, because `reset_bbox_smoothing()` was global
+in both directions.
+
+## 49.4 Both carried defects, and why they are carried
+
+**The output tensor names lie.** The graph names output 0 `pitch_bins`; it holds **yaw**.
+L2CS-Net's `forward()` returns yaw first and the export labelled it wrongly, and labels are
+strings attached at export time that do not change tensor contents. The legacy decode
+unpacked in the true order and so does this. Pinned by a test whose two peaks sit at
+different bins, so a swap is unambiguous rather than a plausible-looking number.
+
+**The angle is a softmax-weighted expectation, not an argmax.** Section 7 described it as an
+argmax once and was corrected. The distinction is pinned three ways:
+
+| Case | Expectation | An argmax |
+|---|---|---|
+| bimodal, peaks at bins 20 and 60 | -20 deg, the weighted mean | -100 or +60, whichever wins the tie |
+| logits nudged by 1e-4 | moves < 0.1 deg | can jump a full 4-degree bin |
+| sharp peak at the extreme bin | pulled strictly inward | lands exactly on the limit |
+
+The third was found by writing the control test wrongly. It asserted -180.0 for a peak at
+bin 0, and failed, because a Gaussian centred on bin 0 has no mass to its left so the mean
+cannot reach the limit. The first draft was **asserting argmax behaviour by accident**, and
+the corrected version is now a third discriminator rather than a control.
+
+Section 48 depends on this smoothness: the 1e-06 rad residual between two ONNX providers is
+only that small because a perturbation moves a weighted mean slightly instead of flipping a
+maximum. An argmax would have made the Tier 2 tolerance impossible to choose.
+
+## 49.5 The no-I/O constraint is enforced, not asserted
+
+A missing model raises `ModelNotFoundError` naming the command that fetches it. The test
+does not merely check the exception: it replaces **every** download entry point in
+`assets.download` with something that fails the test if called at all, then constructs the
+model. A silent fetch would break the no-network guarantee that lets this layer run in CI,
+and for the gaze weights specifically it would breach the licence position in NOTICE.
+
+Writing that test walked straight into the shadowing defect recorded in 40.3:
+`from focusedgaze.assets import download` binds the **function**, not the submodule, because
+`assets/__init__` re-exports a callable of that name over its own module. The test now goes
+through `sys.modules`, the one spelling that cannot be shadowed, with the reason at the
+import. The trap is still live and still an open API question.
+
+## 49.6 A circular import, and why the fix is lazy exports
+
+`config.py` imports `PositioningConfig` from `core.positioning`, and `estimator.py` imports
+`GazeConfig` back from `config`. Importing the estimator eagerly in `core/__init__.py`
+closed that loop and failed at import time with a partially initialised module.
+
+Resolved with PEP 562 lazy attribute access rather than by moving either type. The second
+benefit is larger than the first: `import focusedgaze.config` no longer pays for MediaPipe,
+which costs seconds and loads native libraries that a caller reading config types never
+needs. `__all__` is written out as a literal rather than derived from the lookup table,
+because a computed `__all__` is invisible to static tools; a test asserts the two agree.
+
+## 49.7 What else this unblocked
+
+`WebcamGazeTracker` and `focusedgaze demo` both existed only as stubs waiting on the
+estimator. Both landed, and the command set is now complete at six.
+
+The tracker is deliberately thin, and two decisions in it are worth recording:
+
+- **Mirroring happens here**, not in the capture layer. Capture publishes frames as the
+  camera delivered them because a shared frame has consumers that disagree about handedness;
+  the tracker is the layer that knows the frames are going to a gaze estimator. It is not
+  cosmetic: the calibration was fitted through a mirrored preview, so an unmirrored frame
+  does not mirror the output, it makes the mapping wrong.
+- **Ownership decides teardown.** A source the tracker opened is released; a source handed in
+  by the caller is not. Releasing a camera the application is still using is worse than
+  leaking one.
+
+## 49.8 Coverage
+
+**86% overall.** `core/model.py` 95%, `core/estimator.py` 89%, `capture/tracker.py` 85%.
+`core/landmarks.py` sits at 58%, and the uncovered half is the MediaPipe graph construction
+and the detect path, which need the real landmarker: those lines are exercised by the Tier 2
+replay, which is `hardware`-marked and excluded from the default run. That is the honest
+reading rather than a gap to paper over.
+
+## 49.9 Phase 2 is closed
+
+Every gate condition in Part D is met: the Tier 2 fixture exists and replays against the
+unmodified pipeline (section 48), the global is gone with the A3 test proving it, the
+provider fallback logs exactly one line naming what loaded, the decode is pinned, and the
+extraction reproduces the legacy pipeline bit-identically on 60 real frames.

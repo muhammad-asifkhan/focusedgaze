@@ -86,7 +86,6 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
     """
     data = _load(fixture)
     mod = impl["positioning"]
-    gate = mod.PositioningGate()
     frame_shape = tuple(data["frame_shape"])
 
     # FINDING (Phase 1): PositioningGate loads models/camera_focal.json through a
@@ -95,8 +94,7 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
     # you launched Python. The harness pins the recorded focal context here so the
     # comparison is meaningful. Phase 2 removes the ambiguity by making the focal
     # length explicit configuration instead of an implicit file lookup.
-    override = data.get("focal_override")
-    gate._focal_override = tuple(override) if override else None
+    gate = impl["make_gate"](data.get("focal_override"))
 
     class FakeLandmark:
         __slots__ = ("x", "y", "z")
@@ -113,13 +111,14 @@ def test_positioning_gate_matches_golden(impl: dict, fixture: str) -> None:
             landmarks[mod.RIGHT_IRIS_CENTER] = FakeLandmark(cx + ipd / 2, cy)
         landmarks[mod.NOSE_TIP] = FakeLandmark(cx, cy)
 
-        st = gate.evaluate(landmarks, frame_shape)
+        raw = gate.evaluate(landmarks, frame_shape)
         label = f"{fixture} ipd={ipd} dx={dx}"
 
         if case.get("result_is_none"):
-            assert st is None, f"{label}: expected no reading from degenerate geometry"
+            assert raw is None, f"{label}: expected no reading from degenerate geometry"
             continue
-        assert st is not None, label
+        assert raw is not None, label
+        st = impl["gate_fields"](raw)
 
         if case["distance_cm"] is None:
             assert st.get("distance_cm") is None, label
