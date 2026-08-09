@@ -118,13 +118,25 @@ broken".
 
 ### How good is it?
 
+**Roughly 3 to 6 cm average on a 34 cm-wide screen**, and the spread matters more
+than the average.
+
 | Situation | Typical error |
 |---|---|
-| Same session you calibrated in | **2.0 to 2.4 cm** |
-| A later session | **~3.0 cm** |
-| Screen corners and bottom edge | Noticeably worse |
+| Screen centre, good calibration | **1.0 cm** |
+| Average over the whole screen | **3.3 to 6.2 cm** |
+| Worst corner | **7.8 to 12.0 cm** |
 
-Design around that last row: **do not put small click targets in the corners.**
+Two measured runs by the same person on the same machine, twenty minutes apart,
+differed by a factor of two, and **which corner was worst swapped between them**.
+That is down to how well the calibration sweep covered each part of the screen,
+not a fixed property of the tracker.
+
+Two things follow. **Do not put small click targets in the corners.** And if one
+region is consistently bad, recalibrate and make sure your eyes actually follow
+the dot out there, rather than assuming the tracker is weak in that area.
+
+Full per-point numbers in [accuracy.md](accuracy.md).
 
 ### How fast?
 
