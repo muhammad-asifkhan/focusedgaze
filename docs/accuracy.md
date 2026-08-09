@@ -144,6 +144,22 @@ it is not.
 
 ## Measuring it yourself
 
+```bash
+focusedgaze accuracy --profile alice --screen-width-cm 34.4 --screen-height-cm 19.4 --save run.json
+focusedgaze accuracy --from-json run.json      # re-render a saved result
+```
+
+Nine points, dwell then sample at each. The report gives per-point error in centimetres and
+as a percentage of screen **width**, grouped by row and by column so a directional weakness
+is visible, and it records the calibration's digest so the result can be tied back to its
+input.
+
+**It refuses to print an average if any point collected no samples**, and names which ones
+failed. That is not fussiness: the tool this replaced averaged the three survivors of five
+validation points and reported 24.4% for a calibration that measured 9.7%.
+
+### The method, and why each part of it
+
 Do not trust a figure measured on the data the model was fitted to. Fitting error is not
 evidence of anything: a degree-3 polynomial will always describe its own training samples
 well.
