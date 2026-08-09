@@ -782,9 +782,15 @@ def migrate_pickle(
     * ``created_at`` comes from the file's modification time, because the pickle
       records no timestamp of its own and stamping it "now" would make every
       migrated profile look freshly calibrated;
-    * ``validation_error`` stays None. The legacy pickle never stored one (the
-      routine printed the held-out error and discarded it), so there is nothing
-      to migrate and putting a number there would be a fabrication;
+    * ``validation_error`` **is carried across when the pickle has one**, which
+      in practice is always. An earlier version of this function set it to None
+      and this docstring asserted the pickle never stored one, "so there is
+      nothing to migrate and putting a number there would be a fabrication".
+      That was wrong: every one of the nine legacy calibrations in the reference
+      tree carries the key. Dropping it destroyed the only field that identifies
+      which fitting run produced a profile, which is exactly what audit section
+      50.4 needed in order to tell two accuracy runs apart. Absent is still
+      tolerated and still becomes None;
     * ``screen_size``/``camera_size`` are whatever the caller passes, for the
       same reason: the pickle does not record them.
 
@@ -877,7 +883,9 @@ def migrate_pickle(
         screen_size=screen_size,
         camera_size=camera_size,
         created_at=created_at,
-        validation_error=None,
+        validation_error=_as_optional_error(
+            model.get("validation_error"), "validation_error"
+        ),
         fit_error=_as_optional_error(model.get("fit_error_normalized"), "fit_error"),
         name=name,
         source=f"migrated from pickle: {source.name}",
