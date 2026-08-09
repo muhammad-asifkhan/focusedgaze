@@ -1,6 +1,6 @@
 """The ``focusedgaze`` console entry point.
 
-Six commands, the full set:
+Seven commands:
 
     download-models   fetch what may be fetched, explain what may not   (Phase 6)
     check             diagnose the environment                          (Phase 6)
@@ -8,6 +8,7 @@ Six commands, the full set:
     export-onnx       convert PyTorch L2CS weights to the ONNX graph    (Phase 6)
     serve             run the gaze WebSocket server                     (Phase 7)
     demo              print live readings from the camera               (Phase 2)
+    accuracy          measure calibration accuracy across the screen    (Phase 8)
 
 ``demo`` and the live path of ``serve`` both needed ``GazeEstimator``, which
 landed with Phase 2. ``serve --replay`` remains, because replaying recorded
@@ -39,6 +40,7 @@ from pathlib import Path
 from typing import Any, Final, TextIO
 
 from . import __version__
+from .accuracy import AccuracyReport
 from .exceptions import GazeError
 from .server import DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SEND_HZ
 
@@ -207,6 +209,149 @@ def _cmd_calibrate(args: argparse.Namespace, out: TextIO) -> int:
         file=out,
     )
     return 1
+
+
+def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
+    """Measure where the model thinks you are looking against where you were told.
+
+    The port of `milestone6_test_accuracy.py`, with the three requirements audit
+    section 50 derived from running the original. The measurement itself needs a
+    person; ``--from-json`` re-renders a saved result, which is how the reporting
+    is exercised without one.
+    """
+    from .accuracy import (
+        DEFAULT_TEST_POINTS,
+        PointMeasurement,
+        build_report,
+        profile_digest,
+        render,
+    )
+
+    if args.from_json:
+        report = _report_from_json(args.from_json)
+        for line in render(report):
+            print(line, file=out)
+        return 0 if report.complete else 1
+
+    from .calibration import CalibrationProfile
+    from .calibration.ui import iter_dwell_targets, measure_drift, median_angle
+    from .capture import WebcamGazeTracker
+
+    if not args.profile:
+        print(
+            "focusedgaze accuracy needs a calibration to measure.\n"
+            "\n"
+            "    focusedgaze accuracy --profile alice\n"
+            "\n"
+            "It compares where you are told to look against where that profile says\n"
+            "you looked, at nine points across the screen. Without a profile there is\n"
+            "nothing to measure: the raw angles are not screen positions.",
+            file=out,
+        )
+        return 2
+
+    profile = CalibrationProfile.load(args.profile)
+    screen = (args.screen_width_cm, args.screen_height_cm)
+    tracker = WebcamGazeTracker(profile=profile)
+
+    print(
+        f"Measuring {len(DEFAULT_TEST_POINTS)} points against profile "
+        f"{args.profile!r} on a {screen[0]:.1f} x {screen[1]:.1f} cm screen.",
+        file=out,
+    )
+    print("Look at each dot as it is named. Ctrl+C to abort.\n", file=out)
+
+    collected: dict[tuple[float, float], list[tuple[float, float]]] = {
+        point: [] for point in DEFAULT_TEST_POINTS
+    }
+    try:
+        with tracker:
+            for target, collecting in iter_dwell_targets(
+                DEFAULT_TEST_POINTS,
+                dwell_seconds=args.dwell,
+                sample_seconds=args.sample,
+            ):
+                result = tracker.read()
+                if result is None:
+                    break
+                if collecting and result.pitch is not None and result.yaw is not None:
+                    collected[target].append((result.pitch, result.yaw))
+            drift = measure_drift(collected[(0.5, 0.5)], profile) if args.drift else (0.0, 0.0)
+    except KeyboardInterrupt:
+        print("\nAborted. No report: a partial grid is not a measurement.", file=out)
+        return 1
+
+    measurements = []
+    for target in DEFAULT_TEST_POINTS:
+        readings = collected[target]
+        angle = median_angle(readings)
+        if angle is None:
+            measurements.append(PointMeasurement(target, None, 0))
+            continue
+        x, y = profile.apply(angle[0], angle[1])
+        measurements.append(
+            PointMeasurement(
+                target=target,
+                predicted=(min(max(x - drift[0], 0.0), 1.0),
+                           min(max(y - drift[1], 0.0), 1.0)),
+                n_samples=len(readings),
+            )
+        )
+
+    report = build_report(
+        measurements,
+        screen_cm=screen,
+        profile_digest=profile_digest(profile),
+        profile_name=args.profile,
+        drift_offset=drift,
+        provider=tracker.estimator.provider,
+    )
+    for line in render(report):
+        print(line, file=out)
+
+    if args.save:
+        # NOT named `target`: that name is bound to a screen point in the loop
+        # above, and reusing it here would read as the same thing.
+        destination = Path(args.save)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nSaved to {destination}", file=out)
+
+    return 0 if report.complete else 1
+
+
+def _report_from_json(path: str | Path) -> AccuracyReport:
+    """Rebuild a report from a saved result, for re-rendering and comparison."""
+    from .accuracy import PointMeasurement, build_report
+
+    source = Path(path)
+    try:
+        data = json.loads(source.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise GazeError(f"could not read {source}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GazeError(f"{source} is not valid JSON: {exc}") from exc
+
+    try:
+        measurements = [
+            PointMeasurement(
+                target=(float(p["target"][0]), float(p["target"][1])),
+                predicted=None if p["predicted"] is None
+                else (float(p["predicted"][0]), float(p["predicted"][1])),
+                n_samples=int(p["n_samples"]),
+            )
+            for p in data["points"]
+        ]
+        return build_report(
+            measurements,
+            screen_cm=(float(data["screen_cm"][0]), float(data["screen_cm"][1])),
+            profile_digest=str(data["profile_digest"]),
+            profile_name=str(data.get("profile_name", "unknown")),
+            drift_offset=(float(data["drift_offset"][0]), float(data["drift_offset"][1])),
+            provider=str(data.get("provider", "unknown")),
+        )
+    except (KeyError, TypeError, IndexError, ValueError) as exc:
+        raise GazeError(f"{source} is not a focusedgaze accuracy report: {exc}") from exc
 
 
 def _cmd_demo(args: argparse.Namespace, out: TextIO) -> int:
@@ -544,6 +689,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="stop after N frames (0 runs until interrupted)",
     )
 
+    accuracy = sub.add_parser(
+        "accuracy", help="measure calibration accuracy across the screen"
+    )
+    accuracy.add_argument("--profile", help="calibration profile to measure")
+    accuracy.add_argument(
+        "--screen-width-cm", type=float, default=34.4, help="physical screen width"
+    )
+    accuracy.add_argument(
+        "--screen-height-cm", type=float, default=19.4, help="physical screen height"
+    )
+    accuracy.add_argument("--dwell", type=float, default=1.0, help="seconds before sampling")
+    accuracy.add_argument("--sample", type=float, default=1.5, help="seconds of sampling")
+    accuracy.add_argument(
+        "--drift", action="store_true",
+        help="subtract the centre-point drift offset before comparing",
+    )
+    accuracy.add_argument("--save", metavar="FILE", help="write the result as JSON")
+    accuracy.add_argument(
+        "--from-json", metavar="FILE", help="re-render a saved result instead of measuring"
+    )
+
     export = sub.add_parser("export-onnx", help="convert PyTorch L2CS weights to ONNX")
     export.add_argument(
         "--weights", default="L2CSNet_gaze360.pkl", help="the PyTorch checkpoint to convert"
@@ -578,6 +744,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
         "export-onnx": _cmd_export_onnx,
         "serve": _cmd_serve,
         "demo": _cmd_demo,
+        "accuracy": _cmd_accuracy,
     }
     try:
         return handlers[args.command](args, stream)

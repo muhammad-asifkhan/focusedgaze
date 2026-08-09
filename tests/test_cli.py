@@ -53,22 +53,25 @@ def test_no_arguments_prints_help_and_succeeds() -> None:
     assert "download-models" in output and "check" in output
 
 
-def test_the_command_set_is_complete() -> None:
-    """All six commands exist now.
+COMMANDS = (
+    "download-models", "check", "calibrate", "export-onnx", "serve", "demo", "accuracy",
+)
 
-    `demo` and the live path of `serve` were the two that needed
-    ``GazeEstimator``, which landed with Phase 2. Until then they were absent
-    rather than stubbed, because a subcommand that parses and apologises reads
-    as a feature in --help.
+
+def test_the_command_set_is_complete() -> None:
+    """All seven commands exist.
+
+    `demo` and the live path of `serve` needed ``GazeEstimator``, which landed
+    with Phase 2. `accuracy` is the Phase 8 port of the milestone script. Until
+    each existed they were absent rather than stubbed, because a subcommand that
+    parses and apologises reads as a feature in --help.
     """
     _, output = run()
-    for command in ("download-models", "check", "calibrate", "export-onnx", "serve", "demo"):
+    for command in COMMANDS:
         assert command in output, f"{command} is missing from --help"
 
 
-@pytest.mark.parametrize(
-    "command", ["download-models", "check", "calibrate", "export-onnx", "serve", "demo"]
-)
+@pytest.mark.parametrize("command", COMMANDS)
 def test_every_command_is_reachable(command: str) -> None:
     _, output = run()
     assert command in output
@@ -448,3 +451,81 @@ def test_a_replay_reading_keeps_null_coordinates_when_not_ok(tmp_path) -> None:
     readings = _load_readings(path)
     assert readings[0] == (False, None, None)
     assert readings[1] == (True, 0.25, 0.75)
+
+
+# ---------------------------------------------------------------------------
+# accuracy
+# ---------------------------------------------------------------------------
+
+
+def test_accuracy_without_a_profile_explains_why_it_cannot_measure() -> None:
+    """Raw angles are not screen positions, so there is nothing to compare."""
+    code, output = run("accuracy")
+    assert code == 2, "usage error, not a failed measurement"
+    assert "--profile" in output
+    assert "not screen positions" in output
+
+
+def test_accuracy_can_re_render_a_saved_result(tmp_path) -> None:
+    """The reporting half is exercised without a person in front of a camera."""
+    from focusedgaze.accuracy import PointMeasurement, build_report
+
+    W = 34.4
+    errors = {
+        (0.05, 0.05): 7.8, (0.5, 0.05): 5.2, (0.95, 0.05): 4.0,
+        (0.05, 0.5): 2.1,  (0.5, 0.5): 1.0,  (0.95, 0.5): 1.6,
+        (0.05, 0.95): 1.9, (0.5, 0.95): 3.4, (0.95, 0.95): 3.0,
+    }
+    report = build_report(
+        [
+            PointMeasurement(t, (t[0] + cm / W, t[1]), 34)
+            for t, cm in errors.items()
+        ],
+        screen_cm=(W, 19.4), profile_digest="f" * 64, profile_name="run2",
+    )
+    path = tmp_path / "run2.json"
+    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+
+    code, output = run("accuracy", "--from-json", str(path))
+    assert code == 0
+    assert "run2" in output
+    assert "3.3 cm" in output
+    assert "(5,5)" in output and "7.8 cm" in output
+
+
+def test_accuracy_exits_nonzero_on_an_incomplete_saved_result(tmp_path) -> None:
+    """A partial grid is a failure to measure, and the exit code says so."""
+    from focusedgaze.accuracy import PointMeasurement, build_report
+
+    report = build_report(
+        [
+            PointMeasurement((0.5, 0.5), (0.5, 0.5), 30),
+            PointMeasurement((0.05, 0.05), None, 0),
+        ],
+        profile_digest="g" * 64,
+    )
+    path = tmp_path / "partial.json"
+    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+
+    code, output = run("accuracy", "--from-json", str(path))
+    assert code == 1
+    assert "NO AVERAGE REPORTED" in output
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ("not json", "not valid JSON"),
+        ('{"points": []}', "not a focusedgaze accuracy report"),
+        ('{"points": [{"target": [0.5]}]}', "not a focusedgaze accuracy report"),
+    ],
+)
+def test_a_malformed_saved_result_is_reported_not_traced(
+    tmp_path, content: str, expected: str
+) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text(content, encoding="utf-8")
+    code, output = run("accuracy", "--from-json", str(path))
+    assert code == 1
+    assert output.startswith("error: ")
+    assert expected in output

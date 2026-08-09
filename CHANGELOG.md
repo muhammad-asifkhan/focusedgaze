@@ -77,6 +77,22 @@ this file records what changed, per phase.
   carrying the measured 4.0 s wait and both 0.3 s driver sleeps. The legacy
   `os.chdir` is **deleted**, not delegated, and all four relative lookups that
   rode on it now resolve explicitly; see `MIGRATION_AUDIT.md` §47.2.
+- **Phase 8:** `focusedgaze accuracy`, the port of the milestone accuracy
+  script, plus the `focusedgaze.accuracy` module behind it. Carries the three
+  requirements audit §50 derived from *running* the original rather than reading
+  it: it **refuses to print an average when any point collected no samples** and
+  names which failed, reports **per-point and grouped by row and column** rather
+  than a single edge average, and records the calibration profile's **digest**
+  alongside screen size, drift offset and per-point sample counts. Errors are
+  reported in centimetres and as a percentage of screen **width**, with the
+  denominator named in the type, the JSON and the rendering.
+- **Phase 8:** `focusedgaze.calibration.ui`, the smooth-pursuit routine and the
+  last stub outside Phase 11. Carries the shipping numbers (1728 reference
+  samples, degree 3, MAD 2.5, min_keep 60) with a test that they still agree with
+  the fitter's own defaults. The sweep never lets the dot jump, because samples
+  collected while the user reacquires it are labelled with a target they were not
+  yet looking at, and reports **per-region coverage** against the same 3x3 grid
+  the accuracy test measures on.
 - CI and release workflows with PyPI Trusted Publishing, configured for the real
   owner and repository. TestPyPI is a required predecessor job, and the build
   fails if any distribution contains model weights, calibration profiles or test
@@ -87,6 +103,16 @@ this file records what changed, per phase.
 - `.gitattributes`, line endings normalised to LF in the repository.
 
 ### Changed
+- **Behaviour change, deliberate:** `migrate_pickle` now carries the legacy
+  `validation_error` across instead of discarding it. Its docstring asserted the
+  legacy pickle "never stored one ... so there is nothing to migrate and putting
+  a number there would be a fabrication". That was false: **all nine** legacy
+  calibrations in the reference tree carry the key. The claim was a belief about
+  the data that the data contradicts, and the code implemented the belief.
+  It mattered concretely — §50.4 identified one accuracy run's model *by* its
+  stored validation error matching what the run reported, and migrating that
+  profile destroyed the only field that made the identification possible. Absent
+  still becomes `None` rather than a fabricated `0.0`. `MIGRATION_AUDIT.md` §51.3.
 - **Behaviour change, deliberate:** valid JSON that is not an object no longer
   closes the WebSocket connection (R-11). The legacy handler called the mapping
   accessor on whatever `json.loads` returned, so `"hi"` raised `AttributeError`,
@@ -132,6 +158,15 @@ this file records what changed, per phase.
   never executed.
 
 ### Verified
+- **`focusedgaze accuracy` reproduces the recorded run's arithmetic exactly**, and
+  the calibration that produced it loads and evaluates through the SDK to within
+  **4.441e-16 rad** over 400 probes — 2 ULP, passing the golden tolerance by a
+  factor of 2.25 million. All nine per-point figures reproduce to 2.2e-15 cm, and
+  every derived statistic matches: average 3.333 cm, 9.69% of width, worst 7.8 cm
+  at (5,5), centre 1.0 cm. **The sensing half is not reproducible** and is
+  reported as such: the recorded run captured error magnitudes, not the
+  predictions they came from, so there is nothing to replay without a person.
+  `MIGRATION_AUDIT.md` §51.2.
 - **The accuracy baseline is measured, and published as a RANGE.** Two runs of
   the unmodified original pipeline, same person, same machine, twenty minutes
   apart: **6.2 cm** and **3.3 cm** average over nine screen points on a 34.4 cm

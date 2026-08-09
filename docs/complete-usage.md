@@ -119,9 +119,16 @@ number of outliers dropped, and both the fit and held-out errors.
 `--migrate` converts a legacy pickled calibration into the JSON format. Keep the
 JSON: it loads without scikit-learn and does not execute code on load.
 
-**Interactive capture (following a moving dot) is still [PLANNED].** The pipeline it
-needs now exists, but the on-screen routine (`calibration/ui.py`) does not. Running
-`focusedgaze calibrate` with no action says so and lists what does work.
+**The smooth-pursuit routine exists** in `focusedgaze.calibration.ui`: the sweep
+path, sample collection against a tracker, per-region coverage accounting, and the
+drift measurement. What is not yet wired is the full-screen window that draws the
+dot, so `focusedgaze calibrate` with no action still lists what works rather than
+starting a session.
+
+The sweep reports **coverage per screen region** after collecting, and warns when a
+region is thin or empty. That is the diagnostic worth having: accuracy depends more
+on how well the sweep covered the screen than on anything else measurable, and a
+region the dot never reached is where the polynomial will extrapolate.
 
 Calibration is **per person, per machine, and per seating position**. It is the
 file the whole system depends on. Move the laptop, change chairs, or swap users,
@@ -167,7 +174,32 @@ against a reading a full window earlier rather than the previous frame. A camera
 takes several seconds to open up, and a check that sampled immediately would
 report a dark room on a well-lit one.
 
-### 3.4 `focusedgaze demo` **[SHIPPED]**
+### 3.4 `focusedgaze accuracy` **[SHIPPED]**
+
+```bash
+focusedgaze accuracy --profile alice --save run.json
+focusedgaze accuracy --from-json run.json
+```
+
+**Inputs:** a calibration profile, a camera, and your physical screen size.
+**Outputs:** per-point error in cm and as % of screen **width**, grouped by row
+and column, plus the profile digest and per-point sample counts.
+
+Three behaviours worth knowing, each of which exists because the tool this
+replaced got it wrong:
+
+- **No average is printed if any point collected nothing.** It names the failed
+  points instead. The original averaged three survivors of five and reported
+  24.4% for a calibration that measured 9.7%.
+- **No single edge average.** Rows and columns, because that is what makes a
+  direction visible. The original reported "even accuracy across the screen"
+  over a table ranging 0.6 to 12.0 cm.
+- **The profile's digest is recorded**, so a result can be tied to the
+  calibration that produced it.
+
+Exit code is 0 for a complete measurement and 1 for an incomplete one.
+
+### 3.5 `focusedgaze demo` **[SHIPPED]**
 
 ```bash
 focusedgaze demo --profile alice        # Ctrl+C to stop

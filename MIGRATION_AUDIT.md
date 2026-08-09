@@ -3942,9 +3942,164 @@ harder to sanity-check against the table printed directly above it.
 already says "reporting only an average hides exactly the thing you need to know"; this is
 that sentence being demonstrated by the tool the page was describing.
 
-## 50.7 The open item is closed
+## 50.7 The open item is closed. The scripts are NOT yet retirable.
 
-Part E item 2 and section 10 item 3 are satisfied: the measurement exists, both runs are
-recorded, and the milestone scripts can now be retired without losing the ability to have
-made it. What replaces them, `focusedgaze accuracy`, has three requirements recorded above
-that came from running the originals rather than from reading them.
+Part E item 2 and section 10 item 3 are satisfied: the measurement exists and both runs are
+recorded.
+
+**A claim made here in an earlier revision was wrong and is corrected: the milestone scripts
+could not "now be retired".** At the time of writing `focusedgaze accuracy` did not exist,
+so deleting them would have removed the ability to re-measure before anything could
+reproduce it. Prove the port, then retire, which is the order the whole migration has used.
+Section 51 is that port.
+
+Two further things about retirement, recorded because they are easy to get wrong quietly:
+
+- The scripts live in the **legacy tree**, which is the golden harness's reference
+  implementation *and a separate repository*. Retiring them is a change to somebody else's
+  repo and gets said out loud when the time comes, not done as a tidy-up.
+- The legacy tree is still what Tier 1 and Tier 2 replay against. It is not dead weight
+  until Phase 8 deletes the legacy path from the harness.
+
+
+---
+
+# Section 51 - `focusedgaze accuracy`, and the sweep that feeds it
+
+## 51.1 The three requirements were the spec
+
+Section 50 derived them from running the legacy tool rather than reading it, and each is
+now a test that fails if the behaviour regresses.
+
+**a. A figure whose basis silently narrowed is not a figure.**
+`AccuracyReport.average_cm` is `None` whenever any point collected nothing, and the
+rendering refuses loudly, names the failed points, and cites what the defect once cost. The
+partial figure is still available as `average_cm_over_measured`, deliberately verbose: a
+caller reaching for it is asserting they know the basis is partial, which is exactly what
+the legacy tool never made anyone say. Both directions are tested, including the control
+that a complete measurement *does* report an average.
+
+**b. Per-point, and grouped by row and column.**
+Rows and columns rather than quadrants, because they are what makes a *direction* visible,
+and direction is what distinguished the two recorded runs. Tested against both:
+
+| | left / centre / right | top / middle / bottom |
+|---|---|---|
+| run 1 | 2.13, 6.43, 10.20 cm | 3.30, 6.60, 8.87 cm |
+| run 2 | 3.93, 3.20, 2.87 cm | 5.67, 1.57, 2.77 cm |
+
+Run 1 degrades monotonically rightward and downward; run 2 is worst at the top. The legacy
+edge average showed neither, and called run 1 "even accuracy across the screen". A test
+asserts the strings `edges` and `even accuracy` do not appear in the rendered output at all.
+
+**c. The result names its input.** Every report carries the profile digest, screen size,
+drift offset, provider, and per-point sample counts, and serialises to JSON. The digest is
+of the profile's **content**, not of a file, so it survives a rename and identifies a
+profile whose file was later overwritten - which is precisely what happened to run 1.
+
+Both units are reported with the denominator named in the type, the JSON and the rendering:
+`% of screen WIDTH`. The inherited figures never said which dimension they used, and that
+made comparing them guesswork.
+
+## 51.2 What the equivalence check could and could not prove
+
+The brief asked for the port to be run against the calibration that produced run 2 and
+confirmed to reproduce its per-point figures. That measurement has two halves and they are
+provable to different degrees, so both are reported rather than one being presented as the
+whole:
+
+| Half | Status |
+|---|---|
+| **The calibration** loads and evaluates identically | **Checked exactly** |
+| **The arithmetic** reproduces the recorded per-point cm | **Checked exactly** |
+| **The sensing** - eye to angle to prediction | **Not reproducible**, needs a person |
+
+The sensing half cannot be checked from the recorded data, and saying so is the point: run 2
+recorded per-point error **magnitudes**, not the predictions or the medians they came from,
+so there is nothing to replay. A run that claimed to have reproduced it end to end would be
+claiming more than the data supports.
+
+**The calibration.** Run 2's model (`461b863c`) loads through `migrate_pickle` at degree 3
+with 10 terms, and over 400 probes the SDK's `apply()` differs from the legacy
+`apply_calibration` by at most **4.441e-16 rad**. That is 2 ULP and it passes the golden
+tolerance by a factor of 2.25 million.
+
+Worth noting precisely: this is **not** bit-identical, where the synthetic Tier 1 model was
+exactly 0.0. The difference is expected and already documented in `profile.py`, which says
+a matrix product and a dot product may differ in the last bit; the legacy path multiplies
+through a sklearn design matrix and the SDK evaluates a scalar dot product. Different
+summation order, same arithmetic. Reporting it as "differs" without the magnitude would be
+alarming and wrong; reporting it as "identical" would be false.
+
+**The arithmetic.** All nine of run 2's per-point figures reproduce to within 2.2e-15 cm,
+and every derived statistic matches what section 50 recorded: average 3.333 cm, 9.69% of
+width, worst 7.8 cm at (5,5), centre 1.0 cm.
+
+## 51.3 A defect found by doing this: the migration was dropping the held-out error
+
+`migrate_pickle` set `validation_error=None` and its docstring asserted why:
+
+> The legacy pickle never stored one (the routine printed the held-out error and discarded
+> it), so there is nothing to migrate and putting a number there would be a fabrication.
+
+**That is false.** All nine legacy calibrations in the reference tree carry the key, with
+values from 0.0578 to 0.2440. The claim was a belief about the data that the data
+contradicts, and the code implemented the belief.
+
+It mattered here specifically. Section 50.4 identified run 2's model **by its stored
+`validation_error` matching the 24.4% it reported**, which is stronger evidence than a
+timestamp. Migrating that profile into the SDK format destroyed the only field that made
+the identification possible.
+
+Fixed in its own commit under rule 4, with tests both ways: a value present is carried, and
+absent still becomes `None` rather than a fabricated `0.0`.
+
+This is the same defect class as section 39's docstring describing a positioning check that
+never ran, except one level further out: not documentation describing code that does not
+match, but documentation *and* code agreeing with each other and both being wrong about the
+data.
+
+## 51.4 The sweep: collection separated from everything else
+
+`calibration/ui.py` is the last stub outside Phase 11. It carries the shipping numbers -
+1728 reference samples, degree 3, MAD 2.5, min_keep 60 - and a test asserts they still agree
+with the fitter's own defaults, because restating a constant in two places is only safe if
+the two cannot drift apart.
+
+Two design decisions worth recording:
+
+**The dot never jumps.** The sweep is boustrophedon, alternating direction each row. A jump
+loses the user, and the samples collected while they reacquire the dot are labelled with a
+target they were not yet looking at. Those mislabels are not obviously wrong, which is what
+makes them dangerous: they enter the training set looking exactly like good data. Pinned by
+a test asserting no consecutive pair of path points is more than a third of the screen
+apart.
+
+**Coverage is reported, per region, against the same 3x3 grid the accuracy test measures
+on.** That is the diagnostic section 50 was missing: a region thin in the sweep is the
+region that will be worst in the test, and comparing them is only possible if both are
+reported over the same cells. Empty regions get a WARNING naming extrapolation; thin ones
+get a NOTE. They are different problems and get different words.
+
+## 51.5 Hardware honesty
+
+`calibration/ui.py` sits at **98%** and `accuracy.py` at **97%**, which overstates how much
+of the *user-facing* behaviour is covered, so here is what is not:
+
+- nobody follows a dot in CI. `collect_pursuit_samples` is driven by a stub tracker and a
+  fake clock, which proves the loop labels samples with the dot's position at that moment
+  and that a blink is skipped rather than ending the sweep. It does not prove a human can
+  track the dot at the chosen speed.
+- `focusedgaze accuracy` measuring for real is exercised only through `--from-json`, which
+  covers the reporting and none of the collection.
+
+The high percentages are a consequence of having pushed nearly everything decidable into
+pure functions, which is the right shape and is also why the number flatters. Stated the
+same way `landmarks.py` at 58% was stated: the figure is not the claim.
+
+## 51.6 Still open
+
+- The end-to-end run of `focusedgaze accuracy` with a person, against a fresh calibration
+  from the new sweep. That is the check that would close the sensing half of 51.2.
+- Retirement of the milestone scripts, which is the repository owner's call and a change to
+  a separate repo (50.7).

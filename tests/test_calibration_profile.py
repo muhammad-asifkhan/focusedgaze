@@ -363,3 +363,61 @@ def test_the_term_order_guard_names_both_orders_when_it_fires() -> None:
     message = str(excinfo.value)
     assert "sklearn" in message and "expected" in message
     assert str(powers.tolist()) in message, "the rejected table is not shown"
+
+
+# ---------------------------------------------------------------------------
+# migrate_pickle carries the held-out error. It used to drop it.
+# ---------------------------------------------------------------------------
+
+
+def test_migration_carries_the_held_out_error_when_the_pickle_has_one() -> None:
+    """It used to be dropped, on a documented belief that was simply false.
+
+    The docstring asserted the legacy pickle "never stored one ... so there is
+    nothing to migrate and putting a number there would be a fabrication".
+    Every one of the nine legacy calibrations in the reference tree carries the
+    key, and dropping it destroyed the only field that identifies which fitting
+    run produced a profile. Audit 50.4 needed exactly that field to tell two
+    accuracy runs apart.
+
+    Built here rather than read from the reference tree, so the test runs
+    anywhere: the point is that a value present in the dict survives migration.
+    """
+    pytest.importorskip("sklearn", reason="the legacy format holds live estimators")
+    import pickle
+    import tempfile
+
+    from focusedgaze.calibration.profile import migrate_pickle
+
+    source = FIXTURES / "synthetic_calibration.pkl"
+    model = pickle.loads(source.read_bytes())
+    model["validation_error"] = 0.24400536175553478
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "with_validation.pkl"
+        path.write_bytes(pickle.dumps(model))
+        migrated = migrate_pickle(path, name="carried")
+
+    assert migrated.validation_error == pytest.approx(0.24400536175553478), (
+        "the held-out error was dropped during migration"
+    )
+
+
+def test_migration_still_tolerates_a_pickle_without_a_held_out_error() -> None:
+    """The control: absent stays absent, and must not become a fabricated 0.0."""
+    pytest.importorskip("sklearn", reason="the legacy format holds live estimators")
+    import pickle
+    import tempfile
+
+    from focusedgaze.calibration.profile import migrate_pickle
+
+    source = FIXTURES / "synthetic_calibration.pkl"
+    model = pickle.loads(source.read_bytes())
+    model.pop("validation_error", None)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "without_validation.pkl"
+        path.write_bytes(pickle.dumps(model))
+        migrated = migrate_pickle(path, name="absent")
+
+    assert migrated.validation_error is None
