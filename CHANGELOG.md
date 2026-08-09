@@ -59,8 +59,8 @@ this file records what changed, per phase.
   frame and a slow consumer jumps to the freshest rather than working through a
   backlog. `WebcamGazeTracker` was gated on Phase 2 and followed with it.
 - **Phase 6:** the CLI. `download-models`, `check`, `calibrate` and
-  `export-onnx`; `serve` followed in Phase 7. `demo` is absent rather than
-  stubbed, because it needs the pipeline. `check` turns most of `docs/troubleshooting.md` into one
+  `export-onnx`; `serve` followed in Phase 7 and `demo` with Phase 2, completing
+  the set at six. `check` turns most of `docs/troubleshooting.md` into one
   command: it reports a CPU-only ONNX provider, a missing or wrong model file,
   a missing or unselected calibration, a camera that will not open, and a room
   too dark for face detection, each with its remedy. Diagnosis lives in the new
@@ -132,6 +132,25 @@ this file records what changed, per phase.
   never executed.
 
 ### Verified
+- **The accuracy baseline is measured, and published as a RANGE.** Two runs of
+  the unmodified original pipeline, same person, same machine, twenty minutes
+  apart: **6.2 cm** and **3.3 cm** average over nine screen points on a 34.4 cm
+  screen. The failure pattern **inverts** between them — run 1 degrades to the
+  right and bottom, run 2 at the top-left, and run 2's worst point is run 1's
+  best. That is a calibration-coverage artifact, not a sensor limit, so no single
+  headline figure is published: quoting "3.3 cm" would have provenance and still
+  be wrong. In percent of screen width, run 2 is 9.7% average and 2.9% at centre,
+  broadly consistent with the inherited 8.9%. Closes an item open since Phase 0.
+  `MIGRATION_AUDIT.md` §50, `docs/accuracy.md`.
+- **Two defects in the legacy tooling, found by running it** and deliberately
+  left unfixed because the scripts are being retired. Its held-out validation
+  reported 24.4% for a model the 9-point test measured at 9.7%, because **two of
+  five validation points collected no samples** and it averaged the survivors.
+  And one run's summary claimed "even accuracy across the screen" while its own
+  table ranged 0.6 cm to 12.0 cm, because it averages all four edges and a good
+  left edge cancelled a bad right one. Both become requirements on
+  `focusedgaze accuracy`: refuse to report a figure when any point collected
+  nothing, and report per-point and per-quadrant rather than an edge average.
 - **The extraction reproduces the legacy pipeline BIT-IDENTICALLY.** The Tier 2
   fixture replayed through both implementations in one process, on the same 60
   real frames: 60/60 bit-identical, **0/60** crop bounding boxes differing, worst

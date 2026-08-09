@@ -253,13 +253,18 @@ checks that had never run.
 
 ## 9. Open items / waiting on a human
 
-1. **Tier 2 fixture.** Blocks the Phase 2 gate. Needs a lit room and a working webcam.
-2. **`milestone6` accuracy baseline** must be run on unmodified code before any
-   milestone script is deleted (Phase 8). It is the source of the "2.0-2.4 cm" claim.
-   **Run it before recalibrating again**: a baseline measured against a calibration that
-   is later replaced has exactly the problem the old item 2 described, now closed below.
-3. **MediaPipe landmark equivalence: unmeasured.** The two venvs run 0.10.35 and a 1.x.
-   The A/B needs an image containing a face, so it is blocked behind item 1. Audit §32.3.
+1. **CLOSED — Tier 2 fixture.** Recorded: 60 frames, 60/60 with a face, digest
+   `11895d83`. The Phase 2 gate is open and Phase 2 has since landed. Audit §48, §49.
+2. **CLOSED — `milestone6` accuracy baseline.** Two runs recorded, and the variance
+   between them is the finding: 6.2 cm and 3.3 cm average twenty minutes apart, with the
+   failure pattern inverting. Published as a range rather than a number. Audit §50.
+   Run 1's calibration model could not be identified, because the original writes every
+   fit to one mutable path and run 2 overwrote it — the third appearance of the §33
+   defect, and the reason `focusedgaze accuracy` must record its profile's digest.
+3. **CLOSED — MediaPipe landmark equivalence.** Measured on the Tier 2 frames once they
+   existed: **0/60 crop bounding boxes differ** between 0.10.35 and 1.0.0, worst angle
+   delta 1.065e-06 rad, 94x under tolerance. §32.3's guess that outputs would be
+   bit-identical was wrong (2/60) and is recorded as wrong. Audit §48.
 4. **The mediapipe range decision.** `pyproject.toml` now declares `>=0.10.30,<1.1`. The
    old floor was unreachable on every supported Python. Widening needs a replay per
    candidate version. Audit §32.5.

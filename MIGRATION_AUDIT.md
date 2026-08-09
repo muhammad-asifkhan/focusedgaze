@@ -3796,3 +3796,155 @@ Every gate condition in Part D is met: the Tier 2 fixture exists and replays aga
 unmodified pipeline (section 48), the global is gone with the A3 test proving it, the
 provider fallback logs exactly one line naming what loaded, the decode is pinned, and the
 extraction reproduces the legacy pipeline bit-identically on 60 real frames.
+
+---
+
+# Section 50 - The milestone6 accuracy baseline, captured at last, and why it is a range
+
+Open since Phase 0 (section 10 item 3, Part E item 2). The window was closing: deleting the
+milestone scripts removes the ability to make this measurement at all.
+
+## 50.1 Two runs, and the variance IS the finding
+
+Twenty minutes apart. Same person, same machine, same 34.4 x 19.4 cm screen, DirectML,
+32-36 samples per point, all nine points measured in both.
+
+| Point | Run 1 | Run 2 |
+|---|---|---|
+| (5,5) top-left | 1.1 cm | **7.8 cm** |
+| (50,5) top-centre | 0.6 cm | 5.2 cm |
+| (95,5) top-right | **8.2 cm** | 4.0 cm |
+| (5,50) left | 2.0 cm | 2.1 cm |
+| (50,50) **centre** | **7.4 cm** | **1.0 cm** |
+| (95,50) right | **10.4 cm** | 1.6 cm |
+| (5,95) bottom-left | 3.3 cm | 1.9 cm |
+| (50,95) bottom-centre | **11.3 cm** | 3.4 cm |
+| (95,95) bottom-right | **12.0 cm** | 3.0 cm |
+| **average** | **6.2 cm** | **3.3 cm** |
+| worst | 12.0 cm at (95,95) | 7.8 cm at (5,5) |
+| calibration validation | 7.6% | 24.4% |
+| drift offset | (-8.0%, -3.4%) | (-7.0%, -4.0%) |
+
+Both averages were recomputed from the per-point values rather than copied: 6.26 and 3.33,
+rounding to the reported 6.2 and 3.3.
+
+**The two runs differ by a factor of two, and the failure pattern INVERTS.** Run 1 is good
+at the top-left and degrades to the right and bottom; run 2 is good at the centre and
+bottom-right and degrades at the top-left. Its worst point is run 1's best.
+
+That is not a sensor limit. A sensor limit would land in the same place twice. It is a
+**calibration-coverage artifact**: the smooth-pursuit sweep covers some of the screen better
+than the rest on any given run, and the polynomial is extrapolating wherever it did not.
+
+## 50.2 Why no single headline number is published
+
+A single figure here would repeat the exact error this project already removed, pointing the
+other way. The README once claimed 2.0-2.4 cm from an unsourced script; that was deleted
+because it had no provenance. Publishing "3.3 cm" now would have provenance and still be
+wrong, because the next run of the same system by the same person measured 6.2 cm.
+
+So `docs/accuracy.md` carries a **range with its conditions**: roughly 3 to 6 cm average on
+a 34 cm screen, best at centre where run 2 reached 1.0 cm, worst at whichever corner the
+pursuit sweep covered least.
+
+**The single most useful sentence in that page is that accuracy depends more on how well the
+calibration covered the screen than on anything else measurable here.** Nothing else varied
+between these two runs.
+
+## 50.3 In percent, so it can be compared with the inherited figures
+
+`docs/accuracy.md` carries the originating project's held-out figures as percentages, so a
+reader needs both units. Normalised to **screen width**, 34.4 cm, which is stated explicitly
+because "% of screen" is ambiguous between width, height and diagonal and the inherited
+figures do not say which:
+
+| | cm | % of width |
+|---|---|---|
+| run 2 average | 3.33 | **9.7%** |
+| run 2 centre | 1.0 | **2.9%** |
+| run 2 worst (5,5) | 7.8 | 22.7% |
+| run 1 average | 6.26 | 18.2% |
+| run 1 worst (95,95) | 12.0 | 34.9% |
+
+Run 2's 9.7% is **broadly consistent with the documented 8.9% overall**, and its centre
+figure of 2.9% sits inside the documented 3-8% for the top and centre. Run 1 is well outside
+both, which is the variance in 50.1 rather than a contradiction of the inherited numbers.
+
+## 50.4 Which model produced which run - and one that cannot be identified
+
+Section 37's principle: a baseline tied to a model that later gets replaced has exactly the
+defect that section exists to prevent.
+
+**Run 2 is identified, and not merely by timestamp.** The live
+`models/calibration_model.pkl` carries `validation_error = 0.24400536175553478`, which is
+the 24.4% run 2 reported, and `degree = 3`:
+
+    sha256 : 461b863ca437897351a59cfb89f2a87825d039974ab0da6b7c6a630e5899bc7f
+    mtime  : 2026-08-08T21:17:59
+    degree : 3,  fit_error_normalized 0.1266,  validation_error 0.2440
+
+Identifying it by a value it stores internally is stronger than mtime, which is why it is
+recorded that way.
+
+**Run 1's model cannot be identified, and that is a finding.** `calibration_model.pkl` is a
+single mutable path that every recalibration overwrites, and no backup in the tree carries an
+August 8 timestamp: the newest is from August 4. Run 2's recalibration destroyed run 1's
+model twenty minutes after it was measured.
+
+This is the **third** appearance of the section 33 defect - a measurement pinned against an
+input that was free to change underneath it. Section 33 caught it in the Tier 1 fixture and
+section 37 fixed it there by committing the model and verifying it by digest. The accuracy
+baseline had the same shape and nobody noticed until it mattered.
+
+**When porting to `focusedgaze accuracy`: record the profile's digest in the result.** The
+SDK's `CalibrationProfile` is a named JSON file rather than one mutable path, so the problem
+is already structurally reduced, but a result that does not name its input is not
+reproducible whatever the storage format.
+
+## 50.5 Two defects in the legacy tooling, found by running it
+
+Recorded, deliberately **not fixed**: the scripts are being retired, and changing them now
+would invalidate the baseline they just produced.
+
+**milestone4's held-out validation is unreliable.** Run 2 reported 24.4% while the 9-point
+test on the same model measured about 9.7%. The cause: **two of its five validation points
+collected no samples at all**, and it averaged the survivors. A 3-point average presented as
+a 5-point one is not a measurement, and the direction of the error is not predictable - here
+it made the model look two and a half times worse than it was.
+
+The 9-point test with 32+ samples at every point is the trustworthy number, and it is the one
+this section quotes.
+
+*Porting note:* `focusedgaze accuracy` must **refuse to report a validation figure when any
+point collected nothing**, rather than averaging what survived. Silently narrowing the basis
+of an average is how 24.4% got reported for a model measuring 9.7%.
+
+**milestone6's advice branch is stale.** It printed "raise POLY_DEGREE to 3 and recalibrate"
+for a model milestone4 had just reported as `degree = 3`, which the pickle above confirms.
+The condition it tests is already true. Harmless, and a good example of advice that outlived
+the thing it was advising about.
+
+## 50.6 Run 1's summary line contradicted its own data
+
+It reported **"even accuracy across the screen"**. The per-point numbers were 0.6 cm at
+top-centre and 12.0 cm at bottom-right, a twentyfold spread.
+
+The mechanism: the summary averages all four edges together, and run 1's good left edge
+(2.0 and 3.3 cm) cancelled its bad right edge (10.4 and 12.0 cm). Two large numbers and two
+small ones average to something unremarkable.
+
+**This is the same defect as section 50.5 and as the 8.9% headline the page already warns
+about: an average taken across a dimension the error actually varies along.** It is worse
+here because it produced a confident English sentence rather than a number, and a sentence is
+harder to sanity-check against the table printed directly above it.
+
+*Porting note:* report **per-point and per-quadrant**, never a single edge average. The page
+already says "reporting only an average hides exactly the thing you need to know"; this is
+that sentence being demonstrated by the tool the page was describing.
+
+## 50.7 The open item is closed
+
+Part E item 2 and section 10 item 3 are satisfied: the measurement exists, both runs are
+recorded, and the milestone scripts can now be retired without losing the ability to have
+made it. What replaces them, `focusedgaze accuracy`, has three requirements recorded above
+that came from running the originals rather than from reading them.

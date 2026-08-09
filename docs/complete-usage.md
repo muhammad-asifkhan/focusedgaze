@@ -376,14 +376,29 @@ switchable.
 
 ### Accuracy you can expect
 
+**A range, not a number**, and the range is the honest answer. Two measured runs
+of the deployed system, same person and machine, twenty minutes apart:
+
 | Condition | Error |
 |---|---|
-| Same session as calibration | ~2.0-2.4 cm |
-| Session held out | ~3.0 cm |
-| Screen corners and bottom edge | Worse |
+| Average over 9 screen points | **3.3 to 6.2 cm** on a 34 cm screen |
+| Best case, screen centre | **1.0 cm** |
+| Worst case, a corner | 7.8 to 12.0 cm |
 
-These are measurements from the deployed system, not targets. Design around the
-corner degradation: put small click targets away from the edges.
+The two runs differed by a factor of two and the failure pattern **inverted**
+between them: one degraded to the right and bottom, the other at the top-left.
+That is a calibration-coverage artifact rather than a sensor limit, so a single
+figure would mislead.
+
+Design around it by keeping small click targets away from the edges and corners,
+and recalibrate if one region is consistently bad rather than assuming the
+tracker is weak there. Full per-point tables and provenance in
+[accuracy.md](accuracy.md); the numbers are recorded in `MIGRATION_AUDIT.md`
+section 50.
+
+An earlier version of this table quoted 2.0-2.4 cm from a source that did not
+exist in this repository. It has been replaced by the measurement above rather
+than repeated.
 
 ---
 

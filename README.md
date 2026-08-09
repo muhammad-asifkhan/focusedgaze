@@ -117,25 +117,31 @@ foundation.
 
 ## Accuracy
 
-The honest summary is that accuracy is uneven across the screen, and the bottom is the
-worst part.
+The honest summary is that accuracy is uneven across the screen, and **which part is worst
+varies between calibrations**.
 
-On the reference setup, held-out validation error after calibration is about **8.9% of
-screen size**, and that average hides the spread: roughly **3–8% across the top and
-centre**, and **13–14% along the bottom edge**. If you are placing targets, put them where
-the tracker is good, and do not put anything small or important along the bottom.
+The originating project's documentation reports held-out validation error around **8.9% of
+screen size**, spread as roughly **3–8% across the top and centre** and **13–14% along the
+bottom edge**. Our own two measured runs did not reproduce that pattern consistently: one was
+worst at the bottom-right, the other was among its best there and worst at the top-left.
+
+So the design advice is the durable part: keep small or important targets away from the edges
+and corners, and give anything out there a generous hit area.
 
 Accuracy degrades when the lighting changes, when you move closer or further than you
 calibrated at, and when a different person sits down. The positioning gate exists to catch
 the distance case: it enforces the 45–65 cm range the calibration was collected in.
 
-> **A figure this README used to quote is not currently supported.** Earlier versions
-> claimed 2.0–2.4 cm within a session and about 3.0 cm on a held-out session. Those numbers
-> come from an accuracy script in the original project whose output has never been recorded
-> in this repository, so there is nothing here to back them. They have been removed rather
-> than repeated. The percentage figures above are recorded, and come from the original
-> system's documentation. Re-measuring in centimetres is scheduled before the milestone
-> scripts are deleted.
+> **Measured in centimetres, and it is a range on purpose.** Roughly **3 to 6 cm average**
+> on a 34 cm-wide screen, best at the centre (1.0 cm in the better run), worst at whichever
+> corner the calibration sweep covered least. Two runs by the same person on the same machine
+> twenty minutes apart differed by a factor of two, and the failure pattern *inverted* between
+> them, so a single number would mislead. Accuracy depends more on how well your calibration
+> covered the screen than on anything else measured here. See
+> [docs/accuracy.md](docs/accuracy.md) and `MIGRATION_AUDIT.md` section 50.
+>
+> This replaces an earlier README claim of 2.0–2.4 cm, which had no source in this repository
+> and was deleted rather than repeated.
 
 ## Platform support
 

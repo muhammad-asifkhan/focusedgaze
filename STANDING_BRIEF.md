@@ -253,8 +253,12 @@ watch the sequence counters specifically (Q7-2 is contingent on that result).
 
 ### Phase 8 — tests, docs, examples
 ≥80% coverage on non-hardware paths. **Before deleting any milestone script, run
-`milestone6_test_accuracy.py` on unmodified code and record the numbers in the audit.** Port
-it to `focusedgaze accuracy` rather than losing it.
+`milestone6_test_accuracy.py` on unmodified code and record the numbers in the audit.**
+**DONE** (audit section 50): two runs recorded, and the variance between them is the
+finding. Port it to `focusedgaze accuracy` rather than losing it, carrying the three
+requirements section 50 derived from running the originals: refuse to report a validation
+figure when any point collected no samples, report per-point and per-quadrant rather than a
+single edge average, and record the calibration profile's digest in the result.
 
 ### Phase 9 — packaging verification
 Clean-venv install of the wheel, not the dev venv. Wheel content audit (automated in
@@ -273,6 +277,6 @@ TestPyPI first, install from it into a clean venv, then tag and publish.
 Do not close the phases these block. Remind once per phase gate, not every turn.
 
 1. **Tier 2 fixture** — blocks the Phase 2 gate.
-2. **`milestone6` accuracy baseline** — window closes at Phase 8.
+2. ~~**`milestone6` accuracy baseline** — window closes at Phase 8.~~ **CLOSED**, audit section 50. The milestone scripts can now be retired.
 3. **NOTICE email decision (A3)** — resolved: option (b).
 4. **PyPI / TestPyPI project state (Part B)** — blocks the release workflow being correct.
