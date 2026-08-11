@@ -54,13 +54,14 @@ if state.selected:
     run(state.selected)
 ```
 
-Three tolerances, each from a measured property:
+Four tolerances, each from a measured property:
 
 | | Why |
 |---|---|
 | **Hysteresis** | The gaze jitters by more than a small target's width. A plain inside/outside test flickers and cancels a dwell the user experiences as steady. |
 | **Blink grace** | Blinks give `NO_FACE` for several frames; at 7 fps that is most of a second. The dwell survives, and the clock **freezes** so a well-timed blink cannot select. |
 | **Re-arm** | Without it, resting on a control fires it forever — the Midas touch problem. |
+| **Fixation averaging** | A single reading carries the full per-frame noise; the median of many does not. Selection is a decision made over a whole dwell, so there is no reason to take it from one sample. At 25 Hz a 1.05 s dwell holds ~26 readings. |
 
 ## 3. The install problem, and the Apache-2.0 backend
 
@@ -183,9 +184,41 @@ consumer.
 | d | Grid, calibrated ~47 cm, measured 63.7 | 5.19 cm | 0.67 | 0.61 |
 | **e** | **Grid, calibrated 59.4 cm, measured 60.3** | **2.65 cm** | **0.87** | **0.83** |
 
-**2.65 cm is ~2.5°**, which is at published webcam state of the art (2–3°). For
-context, Vision Pro measures 0.93–1.11° using IR cameras at the eye — a sensing
-gap, not a model gap.
+### Backend comparison, measured
+
+Both calibrated and measured in one sitting at ~50 cm, so this compares models
+rather than seating positions.
+
+| | avg | angular | x gain | y gain | samples/point | worst |
+|---|---|---|---|---|---|---|
+| **Intel** (OpenVINO CPU) | **1.43 cm** | **1.61°** | 0.98 | 0.93 | 37–40 | 2.50 cm |
+| L2CS (DirectML) | 1.96 cm | 2.26° | 0.97 | 0.88 | 9–12 | 4.95 cm |
+
+Against published reference points:
+
+| | |
+|---|---|
+| Tobii Eye Tracker 5 (IR hardware) | 0.90° |
+| **focusedgaze + Intel** | **1.61°** |
+| GazeRecorder (commercial webcam, ~30 calibration points) | 2.65° |
+| Published webcam appearance-based | 2–3° |
+| Falch & Lohan 2024, **using this same Intel model** | 3.30° |
+
+Roughly half the error of the peer-reviewed result using the same model, and
+within 0.7° of a dedicated IR tracker.
+
+**Intel's advantage is partly throughput, not model quality.** It sampled at
+25.6 Hz against L2CS's 7.3 Hz, so each point's median was taken over 38 readings
+instead of 11. The accuracy tool medians per point, so more samples means less
+noise — fixation averaging appearing inside the measurement. Supporting this:
+L2CS's average is dragged by one bad point (4.95 cm at top-centre, 9 samples);
+excluding it, L2CS is 1.58 cm, nearly level.
+
+**Caveat: one run each.** This project's own history warns against trusting
+that — run 4 gave 2.50 cm and run 5 gave 6.76 cm on an identical profile.
+
+For context, Vision Pro measures 0.93–1.11° using IR cameras at the eye — a
+sensing gap, not a model gap.
 
 Selection accuracy, computed from run e's per-point errors:
 
@@ -220,12 +253,13 @@ Discarded 171 of 232 readings:
 
 ## 7. Open
 
-- **Intel backend accuracy is unmeasured** against L2CS on a real face.
-- **The eye-crop convention** in `core/eyes.py` is unvalidated. Head-pose order
-  (`[yaw, pitch, roll]`, degrees), channel order and vector handedness are all
-  pinned by tests but not confirmed against a person.
-- **Fixation averaging** during dwell is not implemented. Independent noise falls
-  as 1/√n; at 30 fps a one-second dwell gives 31 samples instead of 7.
+- **Repeat runs.** The backend comparison is one run each. Two more `accuracy`
+  runs on the Intel profile, without recalibrating, would give the spread — which
+  matters more than the best number. If it holds near 1.4–1.8 cm, Intel should
+  become the default backend rather than only the shippable one.
+- **The eye-crop convention** in `core/eyes.py` is now known to work end to end,
+  but its geometry (iris-centred, 0.6x inter-pupil distance) was chosen rather
+  than tuned. There may be accuracy left in it.
 - **Head-pose features** in the calibration polynomial. The 4x4 matrix is already
   captured and exposed via `GazeEstimator.last_observation`, but the polynomial
   still takes only `(pitch, yaw)`.

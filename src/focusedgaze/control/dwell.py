@@ -1,4 +1,4 @@
-"""Dwell selection: resting your gaze on a target to choose it.
+﻿"""Dwell selection: resting your gaze on a target to choose it.
 
 See the package docstring for why each of the three tolerances exists. All
 timings are in seconds and come from the caller, so this is testable on a fake
@@ -7,6 +7,7 @@ clock and cannot drift with frame rate.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Final
@@ -18,6 +19,7 @@ __all__ = [
     "DEFAULT_DWELL_S",
     "DEFAULT_HYSTERESIS",
     "DEFAULT_REARM_S",
+    "DEFAULT_SMOOTHING_S",
     "DwellSelector",
     "DwellState",
     "EdgeZone",
@@ -40,6 +42,11 @@ DEFAULT_BLINK_GRACE_S: Final = 0.5
 #: How long after a selection before the same target can fire again. Without
 #: this, resting on a control re-triggers it forever.
 DEFAULT_REARM_S: Final = 0.6
+
+#: Window over which gaze points are aggregated before being used to decide
+#: anything. See :class:`DwellSelector` for why this is the largest accuracy
+#: gain available without new hardware.
+DEFAULT_SMOOTHING_S: Final = 0.3
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +127,11 @@ class DwellState:
         edge: The edge zone the gaze is in, or ``None``.
         tracking: Whether this update had a usable gaze point. False during a
             blink, while the dwell is still held.
+        point: The **aggregated** gaze position this state was decided from, or
+            ``None`` when gaze was unavailable. Draw this rather than the raw
+            reading: it is what the selector actually used, so a cursor drawn
+            from the raw point can sit outside a target the selector considers
+            hit. See :attr:`DwellSelector.smoothing_s`.
     """
 
     target: str | None = None
@@ -127,6 +139,7 @@ class DwellState:
     selected: str | None = None
     edge: EdgeZone | None = None
     tracking: bool = True
+    point: tuple[float, float] | None = None
 
 
 @dataclass
@@ -153,6 +166,30 @@ class DwellSelector:
         blink_grace_s: How long a lost gaze is tolerated before cancelling.
         rearm_s: Delay before the same target can be selected again.
         edges: Edge zones, from :func:`edge_zones_for` or built by hand.
+        smoothing_s: Window over which gaze points are aggregated before being
+            used to decide anything. ``0`` disables it.
+
+    FIXATION AVERAGING, AND WHY IT IS THE BIGGEST FREE WIN
+    ======================================================
+    A single gaze reading carries the tracker's full per-frame noise. The
+    **median of many** readings does not: independent noise falls as
+    ``1/sqrt(n)``. Selection is a decision made over a whole dwell, not in one
+    frame, so there is no reason to make it from one sample.
+
+    Measured on this project: 2.65 cm average error per reading. At 7 fps a
+    1.05 s dwell holds 7 samples; at 30 fps it holds 31. Those are upper bounds
+    -- only the independent part averages down, and a per-session offset or a
+    gain error does not average away at all -- but the direction is not in doubt,
+    and it costs nothing but a buffer.
+
+    The median rather than the mean, matching the rest of this package: eye data
+    contains real outliers (a saccade away and back, a half-blink), and one of
+    those pulls a mean far more than it moves a median.
+
+    The cost is lag: a 0.3 s window means the point trails the eye by roughly
+    half that. For dwell selection, where the user is deliberately holding still
+    for a second, that is a good trade. For a live cursor it may not be, which is
+    why it is a parameter.
     """
 
     targets: Sequence[Target] = ()
@@ -161,6 +198,7 @@ class DwellSelector:
     blink_grace_s: float = DEFAULT_BLINK_GRACE_S
     rearm_s: float = DEFAULT_REARM_S
     edges: Sequence[Target] = ()
+    smoothing_s: float = DEFAULT_SMOOTHING_S
 
     _active: str | None = field(default=None, init=False, repr=False)
     _entered_at: float | None = field(default=None, init=False, repr=False)
@@ -173,6 +211,9 @@ class DwellSelector:
     _lost: bool = field(default=False, init=False, repr=False)
     _blocked_until: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _edge_since: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _recent: deque[tuple[float, float, float]] = field(
+        default_factory=deque, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -184,6 +225,10 @@ class DwellSelector:
                 raise ConfigError(f"{label} must not be negative, got {value}")
         if self.hysteresis < 0:
             raise ConfigError(f"hysteresis must not be negative, got {self.hysteresis}")
+        if self.smoothing_s < 0:
+            raise ConfigError(
+                f"smoothing_s must not be negative, got {self.smoothing_s}"
+            )
         names = [t.name for t in self.targets]
         duplicates = {n for n in names if names.count(n) > 1}
         if duplicates:
@@ -201,6 +246,30 @@ class DwellSelector:
         self._lost = False
         self._blocked_until.clear()
         self._edge_since.clear()
+        self._recent.clear()
+
+    def _aggregate(self, x: float, y: float, timestamp: float) -> tuple[float, float]:
+        """Per-axis median of the readings inside the smoothing window.
+
+        Per-axis rather than a 2D geometric median: it is what the accuracy tool
+        and the recentring path already use, the axes are independent enough for
+        the difference not to matter at this scale, and it is O(n log n) on a
+        handful of points rather than iterative.
+        """
+        if self.smoothing_s <= 0:
+            return (x, y)
+        self._recent.append((timestamp, x, y))
+        cutoff = timestamp - self.smoothing_s
+        while self._recent and self._recent[0][0] < cutoff:
+            self._recent.popleft()
+        if len(self._recent) == 1:
+            return (x, y)
+        xs = sorted(p[1] for p in self._recent)
+        ys = sorted(p[2] for p in self._recent)
+        mid = len(xs) // 2
+        if len(xs) % 2:
+            return (xs[mid], ys[mid])
+        return ((xs[mid - 1] + xs[mid]) / 2.0, (ys[mid - 1] + ys[mid]) / 2.0)
 
     def _find(self, x: float, y: float) -> Target | None:
         """The target under the point, preferring the one already held.
@@ -240,13 +309,19 @@ class DwellSelector:
             self._entered_at += timestamp - self._last_good_at
         self._lost = False
         self._last_good_at = timestamp
+
+        # Everything below decides from the aggregate, not the raw reading. The
+        # raw point is never used for a hit test, so a cursor drawn from it can
+        # disagree with what was selected -- which is why the aggregate is
+        # reported back on the state for the caller to draw instead.
+        x, y = self._aggregate(x, y, timestamp)
         edge = self._edge_for(x, y, timestamp)
         target = self._find(x, y)
 
         if target is None:
             self._active = None
             self._entered_at = None
-            return DwellState(edge=edge)
+            return DwellState(edge=edge, point=(x, y))
 
         if target.name != self._active:
             self._active = target.name
@@ -258,7 +333,7 @@ class DwellSelector:
                 # Held over a target that was just chosen. Reported as present
                 # with no progress, so the caller can show it highlighted
                 # without implying another selection is coming.
-                return DwellState(target=target.name, progress=0.0, edge=edge)
+                return DwellState(target=target.name, progress=0.0, edge=edge, point=(x, y))
             del self._blocked_until[target.name]
             self._entered_at = timestamp
 
@@ -268,11 +343,13 @@ class DwellSelector:
             self._blocked_until[target.name] = timestamp + self.rearm_s
             self._entered_at = timestamp
             return DwellState(
-                target=target.name, progress=1.0, selected=target.name, edge=edge
+                target=target.name, progress=1.0, selected=target.name,
+                edge=edge, point=(x, y),
             )
 
         return DwellState(
-            target=target.name, progress=min(held / needed, 1.0), edge=edge
+            target=target.name, progress=min(held / needed, 1.0),
+            edge=edge, point=(x, y),
         )
 
     def _no_gaze(self, timestamp: float) -> DwellState:

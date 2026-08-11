@@ -253,6 +253,90 @@ def test_reset_abandons_a_dwell_in_progress() -> None:
     assert all(s.selected is None for s in _hold(sel, 0.25, 0.25, start=0.9, until=1.5))
 
 
+# ---------------------------------------------------------------------------
+# Fixation averaging.
+#
+# A single reading carries the tracker's full per-frame noise; the median of
+# many does not. Selection is a decision made over a whole dwell, so there is no
+# reason to make it from one sample. Measured error on this project was 2.65 cm
+# per reading, and at 30 fps a 1.05 s dwell holds 31 of them.
+# ---------------------------------------------------------------------------
+
+
+def test_the_aggregated_point_is_reported_for_the_caller_to_draw() -> None:
+    """A cursor drawn from the raw reading can sit outside a target the selector
+    considers hit. Reporting what it actually decided from prevents that."""
+    sel = _selector(smoothing_s=0.3)
+    state = sel.update(0.25, 0.25, 0.0)
+    assert state.point == (0.25, 0.25)
+
+
+def test_averaging_pulls_a_noisy_signal_toward_the_truth() -> None:
+    """The whole point, as a measurement rather than an assertion of intent."""
+    import random
+
+    rng = random.Random(7)
+    truth = 0.5
+    sel = _selector(targets=[Target("t", 0.0, 0.0, 1.0, 1.0)], smoothing_s=1.0)
+
+    raw_errors, smoothed_errors = [], []
+    for i in range(60):
+        noisy = truth + rng.gauss(0.0, 0.05)
+        state = sel.update(noisy, truth, i * 0.033)      # ~30 fps
+        if i >= 30:                                       # once the window is full
+            raw_errors.append(abs(noisy - truth))
+            smoothed_errors.append(abs(state.point[0] - truth))
+
+    raw = sum(raw_errors) / len(raw_errors)
+    smoothed = sum(smoothed_errors) / len(smoothed_errors)
+    assert smoothed < raw / 2, (
+        f"averaging barely helped: {raw:.4f} -> {smoothed:.4f}"
+    )
+
+
+def test_a_single_outlier_does_not_drag_the_point() -> None:
+    """Median, not mean: eye data contains real outliers -- a saccade away and
+    back, a half-blink -- and one of those moves a mean far more."""
+    sel = _selector(targets=[Target("t", 0.0, 0.0, 1.0, 1.0)], smoothing_s=1.0)
+    for i in range(9):
+        sel.update(0.5, 0.5, i * 0.05)
+    state = sel.update(0.99, 0.5, 0.5)          # one wild reading
+    assert abs(state.point[0] - 0.5) < 0.05, f"outlier moved the point to {state.point}"
+
+
+def test_smoothing_can_be_switched_off() -> None:
+    """Lag is real: a 0.3 s window trails the eye by roughly half that. A live
+    cursor may want the raw point."""
+    sel = _selector(smoothing_s=0.0)
+    sel.update(0.25, 0.25, 0.0)
+    state = sel.update(0.35, 0.25, 0.1)
+    assert state.point == (0.35, 0.25)
+
+
+def test_the_window_forgets_old_readings() -> None:
+    """Otherwise the point is dragged by where the eye was seconds ago."""
+    sel = _selector(targets=[Target("t", 0.0, 0.0, 1.0, 1.0)], smoothing_s=0.2)
+    for i in range(5):
+        sel.update(0.1, 0.1, i * 0.05)
+    for i in range(5, 20):
+        state = sel.update(0.9, 0.9, i * 0.05)
+    assert state.point[0] > 0.8, f"stale readings still in the window: {state.point}"
+
+
+def test_reset_empties_the_smoothing_window() -> None:
+    sel = _selector(smoothing_s=1.0)
+    for i in range(5):
+        sel.update(0.1, 0.1, i * 0.05)
+    sel.reset()
+    state = sel.update(0.9, 0.9, 1.0)
+    assert state.point == (0.9, 0.9)
+
+
+def test_negative_smoothing_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="smoothing_s"):
+        DwellSelector(targets=[PLAY], smoothing_s=-0.1)
+
+
 def test_overlapping_targets_resolve_to_the_first_listed() -> None:
     inner = Target("inner", 0.2, 0.2, 0.3, 0.3)
     sel = DwellSelector(targets=[inner, PLAY], dwell_s=1.0)
