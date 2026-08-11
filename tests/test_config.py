@@ -67,12 +67,20 @@ LEGACY_DEFAULTS: list[tuple[str, str, object, str]] = [
     ("filter", "beta", 0.6, "gaze_server.py:101"),
     ("filter", "d_cutoff", 1.0, "gaze_server.py:102"),
 
+    # "l2cs" keeps the original backend as the default, so no existing profile,
+    # fixture or recorded measurement changes meaning when the Intel backend
+    # became available.
+    ("model", "backend", "l2cs", "new in this build; the original stays default"),
+
     ("positioning", "min_distance_cm", 45.0, "positioning_gate.py:30"),
     ("positioning", "max_distance_cm", 65.0, "positioning_gate.py:31"),
     ("positioning", "warn_margin_cm", 5.0, "positioning_gate.py:32"),
     ("positioning", "center_tolerance", 0.12, "positioning_gate.py:33"),
     ("positioning", "real_ipd_cm", 6.3, "positioning_gate.py:35"),
     ("positioning", "assumed_hfov_deg", 60.0, "positioning_gate.py:41"),
+    # Not from the legacy system: this one is new, and False is the whole point.
+    # It changes the runtime mapping, so it must stay off until asked for.
+    ("positioning", "compensate_distance", False, "new in this build; off by default"),
 
     ("runtime", "send_hz", 60.0, "gaze_server.py:93"),
     ("runtime", "host", "localhost", "gaze_server.py:69"),

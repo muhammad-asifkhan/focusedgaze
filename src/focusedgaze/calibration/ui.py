@@ -59,6 +59,8 @@ __all__ = [
     "REFERENCE_SAMPLE_COUNT",
     "CoverageReport",
     "PursuitPath",
+    "collect_dwell_samples",
+    "grid_points",
     "pursuit_path",
     "region_of",
     "summarise_coverage",
@@ -116,7 +118,7 @@ class PursuitPath:
 
 def pursuit_path(
     *,
-    rows: int = 5,
+    rows: int = 6,
     samples_per_row: int = 64,
     margin: float = SWEEP_MARGIN,
     seconds: float = 45.0,
@@ -132,6 +134,16 @@ def pursuit_path(
     The path reaches ``margin`` from every edge, so the fit is asked about the
     corners rather than extrapolating into them. Section 50 found the worst error
     at a corner in both recorded runs.
+
+    **``rows`` must be a multiple of 3, and the default is 6 rather than the 5
+    the reference sweep used.** Coverage is reported over the 3x3 grid of
+    :func:`region_of`, and five evenly spaced rows do not divide evenly into
+    three bands: they land 2-1-2, so the middle third of the screen collects
+    *half* the samples of the top and bottom on every run, by every user. That is
+    not a frame-rate or duration problem and no longer sweep fixes it -- more
+    seconds scales all three bands and preserves the ratio. Six rows land 2-2-2.
+
+    Measured on a real run before the change: 362 top, 187 middle, 368 bottom.
     """
     if rows < 2 or samples_per_row < 2:
         raise CalibrationError(
@@ -149,6 +161,129 @@ def pursuit_path(
             xs.reverse()
         points.extend((x, y) for x in xs)
     return PursuitPath(points=tuple(points), seconds=float(seconds))
+
+
+def _has_angle(result: GazeResult | None) -> bool:
+    """The default sample filter: any reading carrying a gaze angle.
+
+    **Deliberately weaker than callers usually want**, and defined here rather
+    than beside its users because it is a default argument, which is evaluated
+    when the function is defined.
+
+    An out-of-zone reading still carries pitch and yaw -- the estimator's
+    positioning gate reports, it does not veto -- so this keeps samples collected
+    while the user was too far away or off centre. That is why ``usable`` is a
+    parameter: the CLI passes a predicate that also checks the zone, and a caller
+    working from a video file with no positioning information falls back to this.
+    """
+    return (
+        result is not None
+        and result.pitch is not None
+        and result.yaw is not None
+    )
+
+
+def grid_points(
+    *,
+    rows: int = 6,
+    cols: int = 6,
+    margin: float = SWEEP_MARGIN,
+) -> tuple[tuple[float, float], ...]:
+    """Static targets for a dwell calibration, in boustrophedon order.
+
+    THE CASE FOR DWELL OVER PURSUIT
+    -------------------------------
+    Pursuit asks the user to follow a dot that moves at a rate set by
+    ``seconds``, and it works well when the dot is redrawn smoothly. It is
+    redrawn once per pipeline iteration, so on a machine running the gaze model
+    at 7 fps the dot *steps* rather than glides, and a stepping target does not
+    elicit smooth pursuit: the eye makes catch-up saccades instead. Slowing the
+    sweep to collect more samples makes it worse, not better -- a dot taking 20
+    seconds to cross the screen is effectively stationary, and the eye wanders
+    off it. Both failures put noise in ``(pitch, yaw)`` while the label stays
+    confident, and noise in a least-squares predictor biases the fitted gain
+    toward zero. A measured run at 120 seconds lost horizontal gain (0.79 ->
+    0.62) against a shorter one despite collecting three times the samples.
+
+    Dwell has none of that. The target is stationary, so redraw rate is
+    irrelevant and fixation is easy; the cost is that it collects samples at
+    fewer distinct positions. On slow hardware that trade is worth taking.
+
+    Ordering is boustrophedon so consecutive points are adjacent, which keeps the
+    inter-point saccade short and the settling time honest.
+
+    Args:
+        rows: Target rows. **Multiple of 3**, for the reason in
+            :func:`pursuit_path`: evenly spaced rows must divide evenly into the
+            three bands :func:`region_of` reports, or coverage is skewed by
+            construction.
+        cols: Target columns, same constraint.
+        margin: Fraction of the screen edge to stay inside.
+    """
+    if rows < 2 or cols < 2:
+        raise CalibrationError(f"a grid needs at least 2x2 points, got {rows}x{cols}")
+    if not (0.0 <= margin < 0.5):
+        raise CalibrationError(f"margin must be in [0, 0.5), got {margin}")
+
+    low, high = margin, 1.0 - margin
+    points: list[tuple[float, float]] = []
+    for r in range(rows):
+        y = low + (high - low) * r / (rows - 1)
+        xs = [low + (high - low) * c / (cols - 1) for c in range(cols)]
+        if r % 2:
+            xs.reverse()
+        points.extend((x, y) for x in xs)
+    return tuple(points)
+
+
+def collect_dwell_samples(
+    tracker: Any,
+    points: Sequence[tuple[float, float]],
+    *,
+    dwell_seconds: float = 1.0,
+    sample_seconds: float = 1.5,
+    on_frame: Callable[[tuple[float, float], bool, GazeResult | None], None] | None = None,
+    usable: Callable[[GazeResult | None], bool] = _has_angle,
+    clock: Callable[[], float] = time.monotonic,
+) -> list[tuple[float, float, float, float]]:
+    """Hold on each target in turn, recording only once the eye has settled.
+
+    The dwell/sample split is the whole point and is why this cannot just read
+    continuously: the samples taken while the eye is still travelling to a new
+    target carry the *new* target's label and the *old* target's angle, which is
+    a confident mislabel of exactly the kind
+    :func:`~focusedgaze.calibration.fitter.robust_fit_samples` cannot detect.
+    ``collecting`` is False through the settling phase and True through the
+    recording window, and only the latter is kept.
+
+    Args:
+        tracker: Anything with ``read() -> GazeResult | None``.
+        points: Normalised targets, in the order they are shown.
+        dwell_seconds: Settling time before recording starts.
+        sample_seconds: Recording window per point.
+        on_frame: ``(target, collecting, result)``. Where the canvas hooks in;
+            the ``collecting`` flag is passed so the display can show the user
+            when they are actually being measured.
+        clock: Injection seam.
+
+    Returns:
+        ``(pitch, yaw, target_x, target_y)`` rows, as the fitter takes.
+    """
+    samples: list[tuple[float, float, float, float]] = []
+    for target, collecting in iter_dwell_targets(
+        points,
+        dwell_seconds=dwell_seconds,
+        sample_seconds=sample_seconds,
+        clock=clock,
+    ):
+        result = tracker.read()
+        if result is None:
+            break
+        if on_frame is not None:
+            on_frame(target, collecting, result)
+        if collecting and usable(result):
+            samples.append((result.pitch, result.yaw, target[0], target[1]))
+    return samples
 
 
 def region_of(x: float, y: float) -> tuple[int, int]:
@@ -246,6 +381,7 @@ def collect_pursuit_samples(
     path: PursuitPath,
     *,
     on_frame: Callable[[tuple[float, float], GazeResult | None], None] | None = None,
+    usable: Callable[[GazeResult | None], bool] = _has_angle,
     clock: Callable[[], float] = time.monotonic,
 ) -> list[tuple[float, float, float, float]]:
     """Run one sweep and return ``(pitch, yaw, target_x, target_y)`` rows.
@@ -257,9 +393,17 @@ def collect_pursuit_samples(
     this function need a GUI toolkit, and the sample collection is the part worth
     reusing.
 
-    Only readings with a usable angle are kept. A reading without one is not an
-    error: it is a blink, or a moment out of the positioning zone, and the sweep
-    continues.
+    Args:
+        usable: Decides which readings become samples. Defaults to
+            :func:`_has_angle`. An earlier version of this docstring claimed a
+            reading taken "out of the positioning zone" simply had no angle and
+            was therefore dropped for free. **That was false** -- the estimator
+            returns out-of-range readings complete with angles -- so every sweep
+            silently trained on samples collected from positions the calibration
+            would not be valid at. Pass a stricter predicate to exclude them.
+
+    A dropped reading is not an error: it is a blink, or a moment out of the
+    zone, and the sweep continues.
     """
     started = clock()
     samples: list[tuple[float, float, float, float]] = []
@@ -273,7 +417,7 @@ def collect_pursuit_samples(
             break
         if on_frame is not None:
             on_frame(target, result)
-        if result.pitch is not None and result.yaw is not None:
+        if usable(result):
             samples.append((result.pitch, result.yaw, target[0], target[1]))
     return samples
 

@@ -305,6 +305,7 @@ def fit_calibration(
     name: str = "default",
     screen_size: tuple[int, int] | None = None,
     camera_size: tuple[int, int] | None = DEFAULT_CAMERA_SIZE,
+    distance_cm: float | None = None,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
     validation_seed: int = DEFAULT_VALIDATION_SEED,
 ) -> CalibrationProfile:
@@ -322,6 +323,11 @@ def fit_calibration(
         screen_size: Display calibrated against, if known. Recorded, not used in
             the arithmetic: the outputs are screen fractions.
         camera_size: Capture resolution, likewise recorded.
+        distance_cm: Median eye-to-camera distance the samples were collected
+            at. **Not merely recorded**: a calibration is only valid at the
+            distance it was taught at, and this is what lets the runtime correct
+            for sitting somewhere else. See
+            :meth:`~focusedgaze.calibration.profile.CalibrationProfile.distance_scale`.
         validation_fraction: Portion held out to measure ``validation_error``.
             Zero disables the measurement.
         validation_seed: Seed for the hold-out split, so the number is
@@ -345,6 +351,7 @@ def fit_calibration(
         name=name,
         screen_size=screen_size,
         camera_size=camera_size,
+        distance_cm=distance_cm,
         validation_error=validation_error,
         source=f"focusedgaze.calibration.fitter.fit_calibration degree={degree}",
     )
@@ -359,6 +366,7 @@ def robust_fit_samples(
     name: str = "default",
     screen_size: tuple[int, int] | None = None,
     camera_size: tuple[int, int] | None = DEFAULT_CAMERA_SIZE,
+    distance_cm: float | None = None,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
     validation_seed: int = DEFAULT_VALIDATION_SEED,
 ) -> FitResult:
@@ -424,6 +432,7 @@ def robust_fit_samples(
         name=name,
         screen_size=screen_size,
         camera_size=camera_size,
+        distance_cm=distance_cm,
         validation_error=validation_error,
         n_dropped=n_dropped,
         source=(

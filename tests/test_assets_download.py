@@ -561,7 +561,12 @@ def test_ensure_all_reports_downloaded_then_present(
     fabricated: its digest is a real published artifact's.
     """
     asset = make_asset()
-    monkeypatch.setattr(download_module, "runtime_assets", lambda: (asset, GAZE_MODEL))
+    # Takes the backend argument the real one does: ensure_all resolves a
+    # backend's assets, and a fake that ignored it would pass while the caller
+    # it stands in for could not.
+    monkeypatch.setattr(
+        download_module, "runtime_assets", lambda backend=None: (asset, GAZE_MODEL)
+    )
     server = FakeServer(BODY)
 
     first = ensure_all(transport=server)
@@ -578,8 +583,10 @@ def test_ensure_all_never_raises_when_everything_is_broken(
     cache: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A report the CLI can print beats an exception it has to interpret."""
-    monkeypatch.setattr(download_module, "runtime_assets",
-                        lambda: (make_asset(), FACE_LANDMARKER, GAZE_MODEL))
+    monkeypatch.setattr(
+        download_module, "runtime_assets",
+        lambda backend=None: (make_asset(), FACE_LANDMARKER, GAZE_MODEL),
+    )
 
     def broken(url: str, start_byte: int, timeout: float) -> RemoteStream:
         raise urllib.error.URLError("nope")

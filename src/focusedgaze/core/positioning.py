@@ -71,6 +71,22 @@ class PositioningConfig:
     max_distance_cm: float = 65.0
     #: Amber band inside each edge of the green zone.
     warn_margin_cm: float = 5.0
+    #: Rescale gaze predictions when the user is not at the distance their
+    #: profile was calibrated at. **Off by default**: it changes the runtime
+    #: mapping, which is the part of this package protected by golden fixtures,
+    #: and a profile with no recorded distance is unaffected either way.
+    #:
+    #: Turn it on and one calibration stretches across a range of seating
+    #: positions instead of being right at exactly one. Screen offset for a
+    #: fixed gaze angle scales with viewing distance, so a profile taught at
+    #: 47 cm and used at 64 cm under-reaches by roughly 47/64; the correction is
+    #: that ratio, applied about the screen centre. Measured on this project:
+    #: gains of 0.61 and 0.67 for exactly that mismatch.
+    #:
+    #: First-order only. It rests on a small-angle approximation that holds near
+    #: the middle of the screen and degrades toward the corners, and it is not a
+    #: substitute for calibrating where you actually sit.
+    compensate_distance: bool = False
     #: How far the nose may sit from frame centre, as a fraction of width/height.
     center_tolerance: float = 0.12
     #: Adult average interpupillary distance.

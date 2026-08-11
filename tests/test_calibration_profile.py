@@ -247,6 +247,149 @@ def test_the_recorded_surface_is_genuinely_cubic(profile: CalibrationProfile) ->
     )
 
 
+# ---------------------------------------------------------------------------
+# apply_raw: the same arithmetic without the clamp.
+#
+# `apply` clamps to the screen, which is right for a cursor and wrong for a
+# diagnostic: when a session's mapping shifts bodily off one edge, every affected
+# point reads as sitting exactly on that edge and the size of the shift is
+# unrecoverable. An accuracy report recorded a "raw" prediction of exactly 1.0
+# for three separate points, which is what alerted us that the value being stored
+# had already been truncated.
+# ---------------------------------------------------------------------------
+
+
+def _flat_profile(x_at_zero: float = 2.5, y_at_zero: float = -1.5) -> CalibrationProfile:
+    """A degree-1 profile whose output at (0, 0) is far outside the screen."""
+    return CalibrationProfile(
+        name="raw",
+        degree=1,
+        powers=np.array([[0, 0], [1, 0], [0, 1]], dtype=np.int64),
+        coef_x=np.zeros(3, dtype=np.float64),
+        coef_y=np.zeros(3, dtype=np.float64),
+        intercept_x=x_at_zero,
+        intercept_y=y_at_zero,
+    )
+
+
+def test_apply_clamps_but_apply_raw_does_not() -> None:
+    profile = _flat_profile()
+    assert profile.apply(0.0, 0.0) == (1.0, 0.0), "apply must stay on the screen"
+    assert profile.apply_raw(0.0, 0.0) == (2.5, -1.5), "apply_raw must not clamp"
+
+
+def test_apply_is_exactly_apply_raw_clamped() -> None:
+    """`apply` delegates rather than duplicating the arithmetic, so the two
+    cannot drift apart. Bit-identical, not merely close: `robust_fit_samples`
+    compares residuals against a threshold, so a one-ULP difference could change
+    which samples are rejected and therefore the final coefficients."""
+    profile = _flat_profile(0.4, 0.6)
+    low, high = profile.clamp
+    for pitch, yaw in [(0.0, 0.0), (0.13, -0.27), (-0.4, 0.4), (1e-9, -1e-9)]:
+        raw = profile.apply_raw(pitch, yaw)
+        expected = (max(low, min(high, raw[0])), max(low, min(high, raw[1])))
+        assert profile.apply(pitch, yaw) == expected
+
+
+def test_apply_raw_rejects_a_non_finite_angle() -> None:
+    """The same guard as `apply`: an infinite angle must not become a silent
+    coordinate."""
+    profile = _flat_profile()
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(CalibrationError, match="finite"):
+            profile.apply_raw(bad, 0.0)
+        with pytest.raises(CalibrationError, match="finite"):
+            profile.apply_raw(0.0, bad)
+
+
+# ---------------------------------------------------------------------------
+# Distance compensation.
+#
+# A calibration is only valid at the distance it was taught at: screen offset
+# for a fixed gaze angle scales with viewing distance, so a profile learned at
+# 47 cm and used at 64 cm under-reaches toward the middle of the screen.
+# Measured on this project: gains of x=0.67 and y=0.61 against 0.71-0.78
+# predicted by the ratio.
+# ---------------------------------------------------------------------------
+
+
+def test_a_profile_without_a_distance_is_never_rescaled() -> None:
+    """Every profile fitted before this existed has no distance. They must be
+    left exactly alone rather than guessed at."""
+    profile = _flat_profile(0.4, 0.6)
+    assert profile.distance_cm is None
+    assert profile.distance_scale(64.0) == 1.0
+    assert profile.rescaled_for(0.2, 0.8, 64.0) == (0.2, 0.8)
+
+
+def test_an_unknown_current_distance_leaves_the_point_alone() -> None:
+    profile = replace(_flat_profile(), distance_cm=47.0)
+    assert profile.distance_scale(None) == 1.0
+    assert profile.rescaled_for(0.2, 0.8, None) == (0.2, 0.8)
+
+
+def test_sitting_further_away_stretches_the_prediction_outward() -> None:
+    """The correction that matters. Used further away than it was taught, the
+    polynomial under-reaches, so the fix is to push points away from centre."""
+    profile = replace(_flat_profile(), distance_cm=47.0)
+    assert profile.distance_scale(64.0) == pytest.approx(64.0 / 47.0)
+
+    x, y = profile.rescaled_for(0.4, 0.4, 64.0)
+    assert x < 0.4 and y < 0.4, "a point left of centre must move further left"
+    assert x == pytest.approx(0.5 + (0.4 - 0.5) * (64.0 / 47.0))
+
+
+def test_sitting_closer_pulls_the_prediction_inward() -> None:
+    profile = replace(_flat_profile(), distance_cm=64.0)
+    x, _ = profile.rescaled_for(0.0, 0.5, 47.0)
+    assert x > 0.0, "calibrated far and used close over-reaches, so points come in"
+
+
+def test_the_screen_centre_is_the_fixed_point() -> None:
+    """Looking straight ahead lands in the same place at any distance."""
+    profile = replace(_flat_profile(), distance_cm=47.0)
+    assert profile.rescaled_for(0.5, 0.5, 64.0) == (0.5, 0.5)
+
+
+def test_a_stretched_point_cannot_leave_the_screen() -> None:
+    profile = replace(_flat_profile(), distance_cm=30.0)
+    x, y = profile.rescaled_for(0.05, 0.95, 90.0)
+    low, high = profile.clamp
+    assert low <= x <= high and low <= y <= high
+
+
+def test_the_correction_recovers_a_known_gain_loss() -> None:
+    """The measured case, run as arithmetic. A profile taught at 47 cm and used
+    at 63.7 cm reads a 0.95-of-screen target as roughly 0.74; correcting for the
+    distance should put it back near where it belongs."""
+    profile = replace(_flat_profile(), distance_cm=47.0)
+    true_target = 0.95
+    observed = 0.5 + (true_target - 0.5) * (47.0 / 63.7)   # what compression does
+    corrected, _ = profile.rescaled_for(observed, 0.5, 63.7)
+    assert corrected == pytest.approx(true_target, abs=1e-9)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+def test_a_nonsense_distance_is_rejected_at_construction(bad) -> None:
+    """Zero especially: it is a divisor, and a stored zero would divide by zero
+    inside a running tracker."""
+    with pytest.raises(CalibrationError, match="distance_cm"):
+        replace(_flat_profile(), distance_cm=bad)
+
+
+def test_the_distance_survives_a_round_trip() -> None:
+    profile = replace(_flat_profile(), distance_cm=47.5)
+    assert CalibrationProfile.from_dict(profile.to_dict()).distance_cm == 47.5
+
+
+def test_a_profile_written_before_distance_existed_still_loads() -> None:
+    """The field was added without bumping schema_version, because the version
+    check is strict equality and a bump would reject every existing profile."""
+    document = _flat_profile().to_dict()
+    del document["distance_cm"]
+    assert CalibrationProfile.from_dict(document).distance_cm is None
+
+
 def _transposed_coefficients(prof: CalibrationProfile) -> CalibrationProfile:
     """Coefficients attached to the terms in reverse: the classic ordering slip."""
     return replace(prof, coef_x=prof.coef_x[::-1].copy(), coef_y=prof.coef_y[::-1].copy())

@@ -1,10 +1,11 @@
 """The ``focusedgaze`` console entry point.
 
-Seven commands:
+Eight commands:
 
     download-models   fetch what may be fetched, explain what may not   (Phase 6)
+    setup             fresh install to usable, in one command           (Phase 6)
     check             diagnose the environment                          (Phase 6)
-    calibrate         manage calibration profiles                       (Phase 6)
+    calibrate         run a session, or manage profiles                 (Phase 6)
     export-onnx       convert PyTorch L2CS weights to the ONNX graph    (Phase 6)
     serve             run the gaze WebSocket server                     (Phase 7)
     demo              print live readings from the camera               (Phase 2)
@@ -13,6 +14,11 @@ Seven commands:
 ``demo`` and the live path of ``serve`` both needed ``GazeEstimator``, which
 landed with Phase 2. ``serve --replay`` remains, because replaying recorded
 readings is how the wire format is tested without a camera.
+
+``calibrate`` and ``accuracy`` draw a full-screen dot through
+:mod:`focusedgaze.calibration.screen`. Both were previously unrunnable for the
+same reason: the collection loops existed, and nothing put a target on the
+screen for the user to look at.
 
 EXIT CODES
 ----------
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from collections.abc import Sequence
@@ -41,7 +48,7 @@ from typing import Any, Final, TextIO
 
 from . import __version__
 from .accuracy import AccuracyReport
-from .exceptions import GazeError
+from .exceptions import CalibrationAborted, GazeError
 from .server import DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SEND_HZ
 
 __all__ = ["main"]
@@ -51,6 +58,15 @@ __all__ = ["main"]
 #: else as replacement characters. The project has already fixed one bug of
 #: exactly that shape (commit "Fix em-dash in CLI console output").
 _MARK: Final[dict[str, str]] = {"ok": "[ ok ]", "warn": "[warn]", "fail": "[FAIL]"}
+
+#: Consecutive usable frames before the sweep starts. At ~30 fps this is about a
+#: second of the user actually holding the position, which is long enough to
+#: reject a face that drifted through the zone and short enough not to nag.
+_PREFLIGHT_HOLD_FRAMES: Final[int] = 30
+
+#: Seconds between "you are positioned" and the dot moving, so the user can get
+#: their eyes to it before it is carrying a label.
+_COUNTDOWN_SECONDS: Final[float] = 3.0
 
 
 def _print_reports(reports: Sequence[Any], out: TextIO) -> int:
@@ -75,10 +91,51 @@ def _print_reports(reports: Sequence[Any], out: TextIO) -> int:
     return failures
 
 
+def _add_backend_arg(parser: argparse.ArgumentParser) -> None:
+    """The ``--backend`` flag, on every command that loads or checks a model.
+
+    Both backends are supported and neither is going away. L2CS stays the
+    default because it is what every existing profile, fixture and recorded
+    measurement was made against; Intel is the one that can be redistributed and
+    the one that runs at 2 ms instead of 142.
+    """
+    parser.add_argument(
+        "--backend",
+        choices=("l2cs", "intel"),
+        default=None,
+        help="which gaze model to use. l2cs (default) is the original; intel is "
+             "Apache-2.0, ~70x faster here, and fetched automatically",
+    )
+
+
+def _config_for(args: argparse.Namespace) -> Any:
+    """A :class:`GazeConfig` with the command line's backend applied.
+
+    Returns the plain default when ``--backend`` was not given, so a command
+    that never had the flag behaves exactly as before.
+    """
+    from dataclasses import replace
+
+    from .config import GazeConfig
+
+    config = GazeConfig()
+    backend = getattr(args, "backend", None)
+    if backend:
+        config = replace(config, model=replace(config.model, backend=backend))
+    return config
+
+
+def _backend_of(args: argparse.Namespace) -> str:
+    """The backend name a command should report and fetch assets for."""
+    return str(_config_for(args).model.backend)
+
+
 def _cmd_download_models(args: argparse.Namespace, out: TextIO) -> int:
     from .assets import ensure_all
 
-    reports = ensure_all(allow_download=not args.no_download)
+    reports = ensure_all(
+        allow_download=not args.no_download, backend=_backend_of(args)
+    )
     failures = _print_reports(reports, out)
     manual = [r for r in reports if r.state == "manual"]
     if manual:
@@ -94,7 +151,7 @@ def _cmd_download_models(args: argparse.Namespace, out: TextIO) -> int:
 def _cmd_check(args: argparse.Namespace, out: TextIO) -> int:
     from .diagnostics import run_checks, worst_status
 
-    results = run_checks(camera=not args.no_camera)
+    results = run_checks(camera=not args.no_camera, backend=_backend_of(args))
 
     if args.json:
         print(
@@ -195,20 +252,406 @@ def _cmd_calibrate(args: argparse.Namespace, out: TextIO) -> int:
         )
         return 0
 
-    # Interactive capture is the one path that needs the pipeline.
+    # Interactive capture: a camera, a screen, and a person following the dot.
+    return _run_interactive_calibration(args, out)
+
+
+def _run_interactive_calibration(args: argparse.Namespace, out: TextIO) -> int:
+    """Position the user, sweep the dot, report coverage, fit, save.
+
+    Every step but the drawing already existed. The sweep path, the sample
+    collection, the coverage accounting and the robust fit are
+    :mod:`focusedgaze.calibration.ui` and
+    :mod:`focusedgaze.calibration.fitter`, both pure and both covered in CI; this
+    function is the wiring plus the one thing that needs a display.
+    """
+    from .calibration import active_profile_name, robust_fit_samples, set_active_profile
+    from .calibration.screen import DotRenderer
+    from .calibration.ui import (
+        collect_dwell_samples,
+        collect_pursuit_samples,
+        grid_points,
+        pursuit_path,
+        summarise_coverage,
+    )
+    from .capture import WebcamGazeTracker
+
+    config = _config_for(args)
+
     print(
-        "Interactive calibration needs the gaze pipeline, which is Phase 2 and is "
-        "not implemented yet.\n"
-        "\n"
-        "What works now:\n"
-        "  focusedgaze calibrate --list\n"
-        "  focusedgaze calibrate --from-samples samples.json --name alice\n"
-        "  focusedgaze calibrate --migrate old_calibration.pkl --name alice\n"
-        "  focusedgaze calibrate --activate alice\n"
-        "  focusedgaze calibrate --delete alice\n",
+        f"Calibrating profile {args.name!r} on the {config.model.backend} backend.",
         file=out,
     )
-    return 1
+    if args.grid:
+        points = grid_points(rows=args.rows, cols=args.rows)
+        total = len(points) * (args.dwell + args.sample)
+        print(
+            f"Look at each of {len(points)} dots in turn, about "
+            f"{total:.0f} seconds in total. The dot is hollow while you settle on "
+            "it and solid while you are being measured.",
+            file=out,
+        )
+    else:
+        path = pursuit_path(rows=args.rows, seconds=args.seconds)
+        print(
+            f"Follow the dot with your eyes for {args.seconds:.0f} seconds. "
+            "Keep your head still and move only your eyes.",
+            file=out,
+        )
+    print("Escape or q stops at any point.\n", file=out)
+
+    # The camera is opened before the window so its warm-up happens against a
+    # terminal the user can read, not a black full-screen canvas that looks hung.
+    tracker = WebcamGazeTracker(profile=None, config=config)
+    samples: list[tuple[float, float, float, float]] = []
+    with tracker, DotRenderer() as screen:
+        if not args.no_preflight:
+            _run_preflight(tracker, screen, config)
+
+        # The same predicate the gate uses. A sample collected from outside the
+        # zone teaches the polynomial a mapping that does not hold there, and it
+        # is not detectable afterwards: it is a plausible angle with a confident
+        # label. `filled` shows the user which frames are actually counting.
+        #
+        # Tallied, because "no samples" and "not fitting" are the two ways this
+        # command declines to write a profile and neither previously said what
+        # was actually being thrown away. A run that discards everything for
+        # being 3 cm too far away should say so, not just refuse.
+        tally = _ZoneTally(config)
+
+        # Two callers, one of which must NOT tally. `tally.accepts` goes to the
+        # collector, which asks once per candidate reading; the renderer asks the
+        # same question again to decide whether to fill the dot, and counting
+        # that too doubles every figure in the breakdown. Measured on a real run:
+        # "Discarded 180 of 954" for a sweep that saw 477 readings and dropped 90.
+        def _shown_as_counting(result: Any) -> bool:
+            return _is_in_zone(result, config)
+
+        if args.grid:
+            shown: list[tuple[float, float]] = []
+
+            def _on_dwell(
+                target: tuple[float, float], collecting: bool, result: Any
+            ) -> None:
+                if not shown or shown[-1] != target:
+                    shown.append(target)
+                screen.draw_dot(
+                    target,
+                    filled=collecting and _shown_as_counting(result),
+                    progress=(len(shown) - 1) / max(len(points) - 1, 1),
+                )
+
+            samples = collect_dwell_samples(
+                tracker, points,
+                dwell_seconds=args.dwell,
+                sample_seconds=args.sample,
+                on_frame=_on_dwell,
+                usable=tally.accepts,
+            )
+        else:
+            started = time.monotonic()
+
+            def _on_frame(target: tuple[float, float], result: Any) -> None:
+                # Hollow means "this frame is not being recorded". It costs
+                # nothing -- `filled` already exists for the accuracy grid -- and
+                # it turns a silently wasted sweep into something the user can
+                # see and correct while it is still running.
+                screen.draw_dot(
+                    target,
+                    filled=_shown_as_counting(result),
+                    progress=(time.monotonic() - started) / max(path.seconds, 1e-9),
+                )
+
+            samples = collect_pursuit_samples(
+                tracker, path, on_frame=_on_frame, usable=tally.accepts
+            )
+
+    coverage = summarise_coverage(samples)
+    print(file=out)
+    for line in coverage.lines():
+        print(line, file=out)
+    for line in tally.lines():
+        print(line, file=out)
+    print(file=out)
+
+    if not samples:
+        print(
+            "No usable samples. Nothing the camera saw was inside the positioning "
+            "zone for the whole sweep.\n"
+            "The discard breakdown above says which. Run `focusedgaze check` to test "
+            "the camera and the lighting.",
+            file=out,
+        )
+        return 1
+
+    if coverage.empty_regions and not args.force:
+        cells = ", ".join(f"({c},{r})" for c, r in coverage.empty_regions)
+        print(
+            f"Not fitting: {len(coverage.empty_regions)} screen region(s) got no "
+            f"samples at all -- {cells}.\n"
+            "\n"
+            "A polynomial fitted without them extrapolates into those regions, and "
+            "that is the single largest cause of bad accuracy in this system. Run it "
+            "again and make sure your eyes actually reach the edges and corners.\n"
+            "\n"
+            "Use --force to fit anyway.",
+            file=out,
+        )
+        return 1
+
+    fit = robust_fit_samples(
+        samples, name=args.name, screen_size=screen.size,
+        distance_cm=_median(tally.distances),
+    )
+    profile = fit.profile
+    saved = profile.save(directory=args.directory)
+    print(f"Fitted {len(samples)} samples -> {saved}", file=out)
+    print(
+        f"       degree {profile.degree}, "
+        f"{fit.n_dropped} outlier(s) dropped, "
+        f"fit error {_fmt(profile.fit_error)}, "
+        f"held-out error {_fmt(profile.validation_error)}",
+        file=out,
+    )
+    if profile.distance_cm:
+        print(
+            f"       collected at {profile.distance_cm:.0f} cm. This profile is only "
+            f"accurate near that distance;\n"
+            f"       sitting further away makes it under-reach toward the middle of "
+            f"the screen.",
+            file=out,
+        )
+
+    if active_profile_name(args.directory) is None:
+        set_active_profile(args.name, args.directory)
+        print(f"       {args.name!r} is now the active profile.", file=out)
+
+    print(
+        f"\nCheck it: focusedgaze accuracy --profile {args.name}",
+        file=out,
+    )
+    return 0
+
+
+class _ZoneTally:
+    """Counts why readings were discarded during a calibration run.
+
+    A refusal to fit is only actionable if it says what was thrown away. Both
+    non-saving exits -- "no usable samples" and an empty screen region -- looked
+    identical whether the user was absent, off centre, or three centimetres
+    beyond the distance limit. This turns them into a number and a remedy.
+    """
+
+    __slots__ = (
+        "_config", "_far", "_near", "distances", "kept", "no_face", "off_centre", "seen",
+    )
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self.seen = 0
+        self.kept = 0
+        self.no_face = 0
+        self.off_centre = 0
+        self._near: list[float] = []
+        self._far: list[float] = []
+        #: Distances of the readings that were KEPT. The profile records their
+        #: median, because that is the distance the polynomial is actually valid
+        #: at -- recording only the rejected ones, as an earlier version did,
+        #: left the calibration distance inferrable but not known.
+        self.distances: list[float] = []
+
+    def accepts(self, result: Any) -> bool:
+        """The predicate the collector calls, recording as it decides."""
+        from .types import GazeStatus
+
+        self.seen += 1
+        if _is_in_zone(result, self._config):
+            self.kept += 1
+            distance = getattr(result, "distance_cm", None)
+            if distance is not None:
+                self.distances.append(float(distance))
+            return True
+
+        if not _has_angle(result):
+            self.no_face += 1
+            return False
+        distance = getattr(result, "distance_cm", None)
+        bounds = self._config.positioning
+        if distance is not None and distance < bounds.min_distance_cm:
+            self._near.append(distance)
+        elif distance is not None and distance > bounds.max_distance_cm:
+            self._far.append(distance)
+        elif getattr(result, "status", None) is GazeStatus.OFF_CENTER:
+            self.off_centre += 1
+        else:
+            self.off_centre += 1
+        return False
+
+    def lines(self) -> list[str]:
+        """Human-readable breakdown, empty when nothing was discarded."""
+        dropped = self.seen - self.kept
+        if dropped <= 0:
+            return []
+        bounds = self._config.positioning
+        out = [f"Discarded {dropped} of {self.seen} readings:"]
+        if self.no_face:
+            out.append(f"  {self.no_face:>5}  no face detected")
+        for label, values, remedy in (
+            ("too close", self._near, "move back"),
+            ("too far", self._far, "move closer"),
+        ):
+            if values:
+                middle = sorted(values)[len(values) // 2]
+                out.append(
+                    f"  {len(values):>5}  {label} (median {middle:.0f} cm; "
+                    f"this needs {bounds.min_distance_cm:.0f}-"
+                    f"{bounds.max_distance_cm:.0f} cm, so {remedy})"
+                )
+        if self.off_centre:
+            out.append(f"  {self.off_centre:>5}  off centre")
+        if dropped > self.kept:
+            out.append(
+                "  Most of the run was discarded. Fix the reason above and re-run: "
+                "a profile fitted from what is left will be worse than no profile, "
+                "because it looks like it worked."
+            )
+        return out
+
+
+def _has_angle(result: Any) -> bool:
+    """Whether a reading carries a gaze angle at all.
+
+    ``NOT_CALIBRATED`` counts, and that is the subtlety worth stating: during
+    calibration there is by definition no profile yet, so a perfectly positioned
+    user reports ``NOT_CALIBRATED`` and never ``OK``. Gating on ``OK`` would wait
+    forever for a state that cannot occur until the thing being created already
+    exists.
+
+    This is **not** enough to decide the user is positioned. See
+    :func:`_is_in_zone`.
+    """
+    return (
+        result is not None
+        and getattr(result, "pitch", None) is not None
+        and getattr(result, "yaw", None) is not None
+    )
+
+
+def _is_in_zone(result: Any, config: Any) -> bool:
+    """Whether a reading was taken from a position the calibration is valid at.
+
+    TWO TRAPS, BOTH OF WHICH THIS FUNCTION EXISTED WITHOUT AND WAS WRONG
+    --------------------------------------------------------------------
+    1. **An out-of-range reading still carries pitch and yaw.** The estimator's
+       gate reports, it does not veto: ``OUT_OF_RANGE`` and ``OFF_CENTER``
+       results are returned complete with angles. So a check for "has an angle"
+       passes every state it exists to reject, and the pre-flight became a test
+       for "is a face visible". Measured consequence: an accuracy run collected
+       at 69.4 cm, 4.4 cm beyond the 65 cm limit the gate advertises.
+
+    2. **The calibration path never reports a zone status at all.** With no
+       profile the estimator returns ``NOT_CALIBRATED`` *before* it consults the
+       zone, so ``OUT_OF_RANGE`` cannot appear while calibrating -- which is
+       precisely when the gate matters most. ``distance_cm`` survives that path,
+       so it is checked directly against the configured bounds rather than
+       trusting a status that is not populated.
+    """
+    from .types import GazeStatus
+
+    if not _has_angle(result):
+        return False
+    if getattr(result, "status", None) in (
+        GazeStatus.NO_FACE, GazeStatus.OUT_OF_RANGE, GazeStatus.OFF_CENTER
+    ):
+        return False
+    distance = getattr(result, "distance_cm", None)
+    if distance is not None:
+        bounds = config.positioning
+        if not (bounds.min_distance_cm <= distance <= bounds.max_distance_cm):
+            return False
+    return True
+
+
+def _run_preflight(tracker: Any, screen: Any, config: Any) -> None:
+    """Hold until the user is positioned, then count down into the sweep.
+
+    A sweep collected from someone leaning out of range produces samples the fit
+    cannot use, and the cost is discovered 45 seconds later. This is the cheap
+    check that stops that happening.
+
+    Raises:
+        CalibrationAborted: The user pressed Escape, or the camera stopped.
+    """
+    from .exceptions import CalibrationAborted
+
+    steady = 0
+    while steady < _PREFLIGHT_HOLD_FRAMES:
+        result = tracker.read()
+        if result is None:
+            raise CalibrationAborted("the camera stopped delivering frames")
+        if _is_in_zone(result, config):
+            steady += 1
+            remaining = _PREFLIGHT_HOLD_FRAMES - steady
+            # The distance is shown even when it is acceptable, which is the
+            # point: the zone is 20 cm deep, and a profile is only accurate near
+            # the distance it was collected at. Someone who can see they are at
+            # 47 cm can choose to sit where they normally sit instead of merely
+            # somewhere legal. A run calibrated at ~47 cm and used at 64 cm lost
+            # a third of its reach.
+            distance = getattr(result, "distance_cm", None)
+            body = [f"Hold still... {remaining}"]
+            if distance is not None:
+                body.append(f"{distance:.0f} cm -- sit where you normally would")
+            screen.draw_message(body, headline="Good position")
+        else:
+            steady = 0
+            headline, body = _preflight_guidance(result, config)
+            screen.draw_message(body, headline=headline)
+
+    countdown_started = time.monotonic()
+    while True:
+        elapsed = time.monotonic() - countdown_started
+        if elapsed >= _COUNTDOWN_SECONDS:
+            break
+        left = int(_COUNTDOWN_SECONDS - elapsed) + 1
+        screen.draw_message(["Follow the dot with your eyes"], headline=str(left))
+
+
+def _preflight_guidance(result: Any, config: Any) -> tuple[str, list[str]]:
+    """What to tell the user about a reading that is not usable yet."""
+    from .types import GazeStatus
+
+    status = getattr(result, "status", None)
+    if status is GazeStatus.NO_FACE or not _has_angle(result):
+        return (
+            "No face detected",
+            ["Sit in front of the camera.", "Check the lens is not covered and the room is lit."],
+        )
+
+    distance = getattr(result, "distance_cm", None)
+    low = config.positioning.min_distance_cm
+    high = config.positioning.max_distance_cm
+    out_of_range = status is GazeStatus.OUT_OF_RANGE or (
+        # Checked independently of the status, because the calibration path
+        # reports NOT_CALIBRATED and never OUT_OF_RANGE. Without this the user
+        # gets "Getting a usable reading..." forever while sitting too far away.
+        distance is not None and not (low <= distance <= high)
+    )
+    if out_of_range:
+        if distance is not None:
+            direction = "Move back" if distance < low else "Move closer"
+            return (
+                direction,
+                [f"You are at {distance:.0f} cm.", f"This needs {low:.0f} to {high:.0f} cm."],
+            )
+        return ("Adjust your distance", [f"This needs {low:.0f} to {high:.0f} cm."])
+
+    if status is GazeStatus.OFF_CENTER:
+        return (
+            "Move to the centre",
+            ["Line your face up with the middle of the camera's view."],
+        )
+    return ("Waiting for the camera", ["Getting a usable reading..."])
 
 
 def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
@@ -234,6 +677,7 @@ def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
         return 0 if report.complete else 1
 
     from .calibration import CalibrationProfile
+    from .calibration.screen import DotRenderer
     from .calibration.ui import iter_dwell_targets, measure_drift, median_angle
     from .capture import WebcamGazeTracker
 
@@ -250,34 +694,91 @@ def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
         )
         return 2
 
+    from dataclasses import replace
+
+    config = _config_for(args)
+    if args.compensate_distance:
+        config = replace(
+            config,
+            positioning=replace(config.positioning, compensate_distance=True),
+        )
     profile = CalibrationProfile.load(args.profile)
     screen = (args.screen_width_cm, args.screen_height_cm)
-    tracker = WebcamGazeTracker(profile=profile)
+    tracker = WebcamGazeTracker(profile=profile, config=config)
 
     print(
         f"Measuring {len(DEFAULT_TEST_POINTS)} points against profile "
         f"{args.profile!r} on a {screen[0]:.1f} x {screen[1]:.1f} cm screen.",
         file=out,
     )
-    print("Look at each dot as it is named. Ctrl+C to abort.\n", file=out)
+    print(
+        "Look at each dot as it appears. It is hollow while you settle on it and "
+        "solid while you are being measured.",
+        file=out,
+    )
+    if profile.distance_cm:
+        print(
+            f"This profile was calibrated at {profile.distance_cm:.0f} cm. Sit at "
+            "roughly that distance,\n"
+            "or pass --compensate-distance to correct for the difference.",
+            file=out,
+        )
+    print("Escape, q or Ctrl+C aborts.\n", file=out)
+
+    from .core.headpose import head_angles
 
     collected: dict[tuple[float, float], list[tuple[float, float]]] = {
         point: [] for point in DEFAULT_TEST_POINTS
     }
+    # Diagnostics, alongside the readings rather than inside them: nothing in the
+    # mapping consumes head pose, and the point of recording it is to find out
+    # whether it should.
+    poses: dict[tuple[float, float], list[tuple[float, float, float]]] = {
+        point: [] for point in DEFAULT_TEST_POINTS
+    }
+    distances: dict[tuple[float, float], list[float]] = {
+        point: [] for point in DEFAULT_TEST_POINTS
+    }
     try:
-        with tracker:
+        # NOT named `screen`: that name is already bound above to the display's
+        # size in centimetres, and the report's error arithmetic reads it.
+        with tracker, DotRenderer(title="focusedgaze accuracy") as display:
+            # The same gate `calibrate` runs, for the same reason and now for a
+            # second one. A profile is fitted from a held position, so measuring
+            # it from a different one measures the difference between the two
+            # postures as much as the profile. Two runs on this project showed a
+            # vertical offset of -0.246 and -0.272 -- near-identical, so not a
+            # user shifting about but a reproducible consequence of gating one
+            # command and not the other.
+            if not args.no_preflight:
+                _run_preflight(tracker, display, config)
             for target, collecting in iter_dwell_targets(
                 DEFAULT_TEST_POINTS,
                 dwell_seconds=args.dwell,
                 sample_seconds=args.sample,
             ):
+                # Drawn before the reading is taken, so the dot the user is being
+                # measured against is already on the screen. `collecting` is what
+                # `iter_dwell_targets` yields the flag for: hollow through the
+                # dwell, solid through the sample window, so nobody has to guess
+                # which phase they are in.
+                display.draw_dot(target, filled=collecting)
                 result = tracker.read()
                 if result is None:
                     break
                 if collecting and result.pitch is not None and result.yaw is not None:
                     collected[target].append((result.pitch, result.yaw))
+                    observation = tracker.estimator.last_observation
+                    pose = (
+                        head_angles(observation.transform_matrix)
+                        if observation is not None else None
+                    )
+                    if pose is not None:
+                        poses[target].append((pose.pitch, pose.yaw, pose.roll))
+                    if result.distance_cm is not None:
+                        distances[target].append(result.distance_cm)
             drift = measure_drift(collected[(0.5, 0.5)], profile) if args.drift else (0.0, 0.0)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, CalibrationAborted):
         print("\nAborted. No report: a partial grid is not a measurement.", file=out)
         return 1
 
@@ -288,13 +789,23 @@ def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
         if angle is None:
             measurements.append(PointMeasurement(target, None, 0))
             continue
-        x, y = profile.apply(angle[0], angle[1])
+        # apply_raw, not apply: `apply` clamps to the screen before returning, so
+        # reading its output as "raw" records a value that has already been
+        # truncated and reveals nothing about a prediction that landed outside.
+        x, y = profile.apply_raw(angle[0], angle[1])
+        raw = (x - drift[0], y - drift[1])
         measurements.append(
             PointMeasurement(
                 target=target,
-                predicted=(min(max(x - drift[0], 0.0), 1.0),
-                           min(max(y - drift[1], 0.0), 1.0)),
+                # Clamped, because an application cannot put a cursor off the
+                # screen and that is the error a user actually experiences.
+                predicted=(min(max(raw[0], 0.0), 1.0), min(max(raw[1], 0.0), 1.0)),
                 n_samples=len(readings),
+                # Unclamped, because clamping a prediction that landed off the
+                # screen moves it toward the target and hides how far out it was.
+                raw=raw,
+                head_pose=_median_pose(poses[target]),
+                distance_cm=_median(distances[target]),
             )
         )
 
@@ -320,6 +831,33 @@ def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
     return 0 if report.complete else 1
 
 
+def _median(values: Sequence[float]) -> float | None:
+    """Middle value, or ``None`` for nothing.
+
+    Median rather than mean for the same reason the gaze angles use one: a blink
+    or a moment of bad tracking is an outlier, not a contribution.
+    """
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _median_pose(
+    poses: Sequence[tuple[float, float, float]],
+) -> tuple[float, float, float] | None:
+    """Per-axis median of head angles. ``None`` when nothing was recorded."""
+    if not poses:
+        return None
+    axes = [_median([p[i] for p in poses]) for i in range(3)]
+    if any(a is None for a in axes):
+        return None
+    return (float(axes[0]), float(axes[1]), float(axes[2]))  # type: ignore[arg-type]
+
+
 def _report_from_json(path: str | Path) -> AccuracyReport:
     """Rebuild a report from a saved result, for re-rendering and comparison."""
     from .accuracy import PointMeasurement, build_report
@@ -339,6 +877,11 @@ def _report_from_json(path: str | Path) -> AccuracyReport:
                 predicted=None if p["predicted"] is None
                 else (float(p["predicted"][0]), float(p["predicted"][1])),
                 n_samples=int(p["n_samples"]),
+                # Optional: reports written before `raw` existed do not carry it,
+                # and must still re-render rather than being rejected as
+                # malformed. build_report falls back to the clamped value.
+                raw=None if p.get("raw") is None
+                else (float(p["raw"][0]), float(p["raw"][1])),
             )
             for p in data["points"]
         ]
@@ -364,7 +907,7 @@ def _cmd_demo(args: argparse.Namespace, out: TextIO) -> int:
     from .capture import WebcamGazeTracker
     from .types import GazeStatus
 
-    tracker = WebcamGazeTracker(profile=args.profile)
+    tracker = WebcamGazeTracker(profile=args.profile, config=_config_for(args))
     print(f"Camera {tracker.source.size[0]}x{tracker.source.size[1]}, "
           f"provider {tracker.estimator.provider}. Ctrl+C to stop.", file=out)
     if args.profile is None:
@@ -527,10 +1070,22 @@ def _cmd_export_onnx(args: argparse.Namespace, out: TextIO) -> int:
         )
         return 1
 
-    import torch  # type: ignore[import-not-found]
-    from l2cs import getArch  # type: ignore[import-not-found]
+    # Both ignore lists carry `unused-ignore` because these modules come from the
+    # `export` extra: absent on most machines, where the import is unresolvable,
+    # and present on any machine that has actually converted a model, where a
+    # bare ignore then becomes an error in its own right. The suppression has to
+    # be correct in both environments or the type check fails for whoever has the
+    # other one.
+    import torch  # type: ignore[import-not-found, unused-ignore]
+    from l2cs import getArch  # type: ignore[import-not-found, import-untyped, unused-ignore]
 
-    output = Path(args.output)
+    from .assets import GAZE_MODEL, MODEL_DIR_ENV, asset_path
+
+    # Defaults to the directory the runtime actually reads. The previous default
+    # was the bare filename, i.e. the current working directory, so a user who
+    # followed the printed instructions exactly ended up with a correct export
+    # that `check` still reported as missing, with nothing to connect the two.
+    output = Path(args.output) if args.output else asset_path(GAZE_MODEL)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     model = getArch("ResNet50", args.bins)
@@ -546,7 +1101,11 @@ def _cmd_export_onnx(args: argparse.Namespace, out: TextIO) -> int:
     # reading silently transposes its axes.
     torch.onnx.export(
         model,
-        torch.randn(1, 3, args.input_size, args.input_size),
+        # A 1-tuple, not a bare tensor. Both trace identically -- torch wraps a
+        # lone tensor into `(tensor,)` itself -- but the documented signature
+        # takes a tuple of positional arguments, and the bare form is only a type
+        # error rather than a behaviour change. The exported graph is unaffected.
+        (torch.randn(1, 3, args.input_size, args.input_size),),
         str(output),
         input_names=["input"],
         output_names=["pitch_bins", "yaw_bins"],
@@ -555,6 +1114,16 @@ def _cmd_export_onnx(args: argparse.Namespace, out: TextIO) -> int:
         dynamo=False,  # the older, more stable exporter; avoids onnxscript
     )
     print(f"Exported {weights} -> {output}", file=out)
+    if args.output:
+        expected = asset_path(GAZE_MODEL)
+        if Path(output).resolve() != Path(expected).resolve():
+            print(
+                f"\nNote: the runtime loads {expected}, not this path. Move it there, "
+                f"or set {MODEL_DIR_ENV} to {output.parent}.",
+                file=out,
+            )
+    else:
+        print("This is where the runtime looks, so nothing else needs moving.", file=out)
     print(
         "Note: the output tensors are named pitch_bins/yaw_bins but hold yaw "
         "first. That mislabelling is upstream and is relied upon by the decode "
@@ -562,6 +1131,212 @@ def _cmd_export_onnx(args: argparse.Namespace, out: TextIO) -> int:
         file=out,
     )
     return 0
+
+
+def _cmd_setup(args: argparse.Namespace, out: TextIO) -> int:
+    """Take a fresh install to a usable one, in a single command.
+
+    Four things must be true before the pipeline runs, and before this command
+    existed a user discovered them one failure at a time: the landmarker, the
+    gaze graph, a provider, and a calibration. This reports all four and does the
+    parts it is allowed to do.
+
+    It never installs anything. The conversion needs torch and a git-only
+    package, and a CLI that quietly pulls 2.5 GB into whichever environment
+    happens to be active is not a convenience. The exact commands are printed and
+    the user runs them.
+    """
+    from .assets import GAZE_MODEL, asset_path, ensure_all
+    from .diagnostics import check_onnx_provider
+
+    backend = _backend_of(args)
+    print(f"focusedgaze setup  (backend: {backend})\n", file=out)
+
+    # 1. Whatever may be fetched, fetched. Only the auto-downloadable assets are
+    #    reported here: the gaze model is step 3's subject, and printing its
+    #    licence block twice in one run trains people to skim past it.
+    reports = ensure_all(backend=backend)
+    failures = _print_reports([r for r in reports if r.asset.auto_download], out)
+
+    # On the Intel backend the gaze model is one of those downloads, so the
+    # whole of step 3 is already done and there is nothing to obtain by hand.
+    if backend == "intel":
+        ready = all(r.state != "failed" for r in reports)
+        if ready and failures == 0:
+            print(
+                "\nThe Intel gaze model is Apache-2.0 and was fetched "
+                "automatically.\nNothing to install by hand.",
+                file=out,
+            )
+        return _setup_calibration_step(args, out, failures)
+
+    # 2. The provider, because a correct model on no provider fails at the first
+    #    frame with a message about ONNX rather than about setup.
+    provider = check_onnx_provider()
+    print(f"{_MARK[provider.status]} {provider.name}: {provider.summary}", file=out)
+    if provider.remedy and provider.status != "ok":
+        for line in _wrap(provider.remedy):
+            print(line, file=out)
+    if provider.status == "fail":
+        failures += 1
+
+    # 3. The gaze graph: the one thing that is not fetched, and the one thing
+    #    this command can genuinely shorten.
+    destination = asset_path(GAZE_MODEL)
+    if destination.is_file():
+        print(f"{_MARK['ok']} gaze-model: present at {destination}", file=out)
+    elif args.onnx:
+        result = _install_onnx(args.onnx, destination, out)
+        if result != 0:
+            return result
+    elif args.weights:
+        result = _export_for_setup(args, destination, out)
+        if result != 0:
+            return result
+    else:
+        print(f"{_MARK['fail']} gaze-model: {GAZE_MODEL.filename} is missing", file=out)
+        print(
+            "       focusedgaze cannot fetch it. Two ways in:\n"
+            "\n"
+            "       If somebody has already converted it for you:\n"
+            "           focusedgaze setup --onnx <path to l2cs_gaze360.onnx>\n"
+            "\n"
+            "       Otherwise obtain L2CSNet_gaze360.pkl from the official L2CS-Net\n"
+            "       distribution and convert it here (needs the export extra):\n"
+            "           focusedgaze setup --weights <path to L2CSNet_gaze360.pkl>\n"
+            "\n"
+            "       It derives from Gaze360, which is non-commercial research only.\n"
+            "       See NOTICE.",
+            file=out,
+        )
+
+    if not destination.is_file():
+        failures += 1
+    return _setup_calibration_step(args, out, failures)
+
+
+def _setup_calibration_step(
+    args: argparse.Namespace, out: TextIO, failures: int
+) -> int:
+    """The last step of setup, shared by both backends.
+
+    A missing calibration is a warning rather than a failure: it is the next
+    thing to do, not a broken install, and it needs a person.
+    """
+    from .calibration import list_profiles
+
+    profiles = list_profiles()
+    if profiles:
+        print(f"{_MARK['ok']} calibration: {len(profiles)} profile(s): {', '.join(profiles)}",
+              file=out)
+    else:
+        print(f"{_MARK['warn']} calibration: none yet", file=out)
+
+    print(file=out)
+    if failures:
+        print("Not ready yet. Fix the [FAIL] lines above.", file=out)
+        return 1
+    if not profiles:
+        print("Models and provider are ready. Next: focusedgaze calibrate", file=out)
+        return 0
+    print("Ready. Try: focusedgaze demo", file=out)
+    return 0
+
+
+def _install_onnx(source: str | Path, destination: Path, out: TextIO) -> int:
+    """Validate an already-converted graph and place it where the runtime reads.
+
+    This exists so the conversion is done **once, by one person**. The export
+    needs torch and a git-only package for a job whose output is a portable ONNX
+    graph: the execution provider is chosen at load time, not baked in, so one
+    person's export serves colleagues on other GPUs and other operating systems.
+    Without this they would be copying a file into a cache directory by hand.
+
+    The graph is loaded and run before it is copied, not after. A file that turns
+    out to be the wrong model should fail while it is still the user's file, not
+    once it is sitting in the cache under the name the runtime trusts.
+    """
+    import shutil
+
+    from .assets import GAZE_MODEL, sha256_file
+    from .core.model import GazeModel
+
+    candidate = Path(source)
+    if not candidate.is_file():
+        print(f"{_MARK['fail']} gaze-model: no file at {candidate}", file=out)
+        return 1
+
+    if candidate.resolve() == destination.resolve():
+        print(f"{_MARK['ok']} gaze-model: already in place at {destination}", file=out)
+        return 0
+
+    print(f"       checking {candidate} is a usable gaze graph...", file=out)
+    try:
+        import numpy as np
+
+        model = GazeModel(model_path=candidate)
+        pitch, yaw = model.predict(np.zeros((64, 64, 3), dtype=np.uint8))
+    except GazeError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any load failure means "not this file"
+        print(f"{_MARK['fail']} gaze-model: {candidate.name} did not load as a gaze model",
+              file=out)
+        print(
+            "       It must be an ONNX export of L2CS-Net: one image input and two\n"
+            "       bin tensors out. A different model, or a truncated download, fails\n"
+            f"       exactly here.\n       ONNX Runtime reported: {exc}",
+            file=out,
+        )
+        return 1
+
+    if not (math.isfinite(pitch) and math.isfinite(yaw)):
+        print(f"{_MARK['fail']} gaze-model: {candidate.name} loaded but produced "
+              f"{pitch}, {yaw}", file=out)
+        return 1
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(candidate, destination)
+    print(f"{_MARK['ok']} gaze-model: installed to {destination}", file=out)
+
+    # Informational only, never enforced: the graph is produced on whichever
+    # machine ran the export, so its bytes legitimately differ between installs.
+    # See assets/registry.py on why this asset pins no digest.
+    digest = sha256_file(destination)
+    if GAZE_MODEL.reference_sha256 and digest == GAZE_MODEL.reference_sha256:
+        print("       matches the reference export byte for byte.", file=out)
+    else:
+        print(f"       sha256 {digest[:16]}... (differs from the reference export, "
+              "which is normal: ONNX bytes depend on the exporting machine)", file=out)
+    return 0
+
+
+def _export_for_setup(
+    args: argparse.Namespace, destination: Path, out: TextIO
+) -> int:
+    """Run the ONNX conversion as part of setup, into the cache the runtime reads."""
+    missing = _missing_export_dependencies()
+    if missing:
+        print(f"{_MARK['fail']} gaze-model: cannot convert, missing "
+              f"{', '.join(missing)}", file=out)
+        print(
+            "       Install the conversion dependencies, then re-run this command:\n"
+            "           pip install 'focusedgaze[export]'\n"
+            "           pip install git+https://github.com/Ahmednull/L2CS-Net.git\n"
+            "       The second line is separate because `l2cs` is only installable from\n"
+            "       a git URL, which PyPI forbids this package from declaring.",
+            file=out,
+        )
+        return 1
+
+    print(f"       converting {args.weights} -> {destination}", file=out)
+    print("       (loading torch, this takes a moment)", file=out)
+    export_args = argparse.Namespace(
+        weights=args.weights,
+        output=str(destination),
+        bins=args.bins,
+        input_size=args.input_size,
+    )
+    return _cmd_export_onnx(export_args, out)
 
 
 def _missing_export_dependencies() -> list[str]:
@@ -646,6 +1421,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report what is present without fetching anything",
     )
 
+    setup = sub.add_parser(
+        "setup", help="take a fresh install to a usable one, in one command"
+    )
+    # One source for the graph or the other, never both: they are two ways to
+    # answer the same question and supplying each would silently pick a winner.
+    source = setup.add_mutually_exclusive_group()
+    source.add_argument(
+        "--weights",
+        help="path to L2CSNet_gaze360.pkl; converts it into the model cache",
+    )
+    source.add_argument(
+        "--onnx",
+        help="path to an already-converted l2cs_gaze360.onnx; validates and installs it",
+    )
+    setup.add_argument("--bins", type=int, default=90, help="gaze bins the model was trained with")
+    setup.add_argument("--input-size", type=int, default=448, help="model input resolution")
+
     check = sub.add_parser("check", help="diagnose the environment")
     check.add_argument(
         "--no-camera",
@@ -654,7 +1446,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("--json", action="store_true", help="machine-readable output")
 
-    calibrate = sub.add_parser("calibrate", help="manage calibration profiles")
+    calibrate = sub.add_parser(
+        "calibrate", help="run a calibration session, or manage saved profiles"
+    )
     calibrate.add_argument("--list", action="store_true", help="list profiles")
     calibrate.add_argument("--activate", metavar="NAME", help="make a profile the active one")
     calibrate.add_argument("--delete", metavar="NAME", help="delete a profile")
@@ -668,6 +1462,40 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     calibrate.add_argument("--name", default="default", help="profile name to write")
     calibrate.add_argument("--directory", help="profile directory (default: user config dir)")
+    calibrate.add_argument(
+        "--seconds", type=float, default=45.0, help="how long the pursuit sweep runs"
+    )
+    calibrate.add_argument(
+        "--grid",
+        action="store_true",
+        help="dwell on static dots instead of following a moving one; steadier on "
+             "slow hardware, where a stepping dot defeats smooth pursuit",
+    )
+    calibrate.add_argument(
+        "--rows",
+        type=int,
+        default=6,
+        help="rows in the sweep or grid. A multiple of 3 keeps coverage even "
+             "across the three screen bands (default: 6)",
+    )
+    calibrate.add_argument(
+        "--dwell", type=float, default=1.0,
+        help="--grid only: seconds to settle on each dot before recording",
+    )
+    calibrate.add_argument(
+        "--sample", type=float, default=1.5,
+        help="--grid only: seconds of recording per dot",
+    )
+    calibrate.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="skip the positioning check and start the sweep immediately",
+    )
+    calibrate.add_argument(
+        "--force",
+        action="store_true",
+        help="fit even when a screen region collected no samples",
+    )
 
     serve = sub.add_parser("serve", help="run the gaze WebSocket server")
     serve.add_argument(
@@ -703,18 +1531,42 @@ def _build_parser() -> argparse.ArgumentParser:
     accuracy.add_argument("--sample", type=float, default=1.5, help="seconds of sampling")
     accuracy.add_argument(
         "--drift", action="store_true",
-        help="subtract the centre-point drift offset before comparing",
+        help="subtract the centre-point drift offset before comparing. Note this "
+             "forces the centre point's error to exactly zero, because that is "
+             "where the offset is measured",
+    )
+    accuracy.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="skip the positioning check and start measuring immediately",
+    )
+    accuracy.add_argument(
+        "--compensate-distance",
+        action="store_true",
+        help="rescale predictions for the difference between where you are sitting "
+             "and where the profile was calibrated. Needs a profile that recorded "
+             "its distance",
     )
     accuracy.add_argument("--save", metavar="FILE", help="write the result as JSON")
     accuracy.add_argument(
         "--from-json", metavar="FILE", help="re-render a saved result instead of measuring"
     )
 
+    # Every command that loads a model, checks for one, or fetches one. Not
+    # export-onnx, which converts L2CS weights specifically and has no meaning
+    # for another backend.
+    for command in (download, setup, check, calibrate, serve, demo, accuracy):
+        _add_backend_arg(command)
+
     export = sub.add_parser("export-onnx", help="convert PyTorch L2CS weights to ONNX")
     export.add_argument(
         "--weights", default="L2CSNet_gaze360.pkl", help="the PyTorch checkpoint to convert"
     )
-    export.add_argument("--output", default="l2cs_gaze360.onnx", help="where to write the graph")
+    export.add_argument(
+        "--output",
+        default=None,
+        help="where to write the graph (default: the managed model cache, where the runtime looks)",
+    )
     export.add_argument("--bins", type=int, default=90, help="gaze bins the model was trained with")
     export.add_argument("--input-size", type=int, default=448, help="model input resolution")
 
@@ -739,6 +1591,7 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
 
     handlers = {
         "download-models": _cmd_download_models,
+        "setup": _cmd_setup,
         "check": _cmd_check,
         "calibrate": _cmd_calibrate,
         "export-onnx": _cmd_export_onnx,
@@ -748,6 +1601,15 @@ def main(argv: Sequence[str] | None = None, out: TextIO | None = None) -> int:
     }
     try:
         return handlers[args.command](args, stream)
+    except CalibrationAborted:
+        # Not an error, so it does not get the "error:" prefix: stopping a sweep
+        # with Escape is a supported way out, and reporting a user's own decision
+        # as a fault is how a tool teaches people to distrust its output.
+        print("Stopped. Nothing was saved.", file=stream)
+        return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted. Nothing was saved.", file=stream)
+        return 1
     except GazeError as exc:
         # Every error this package raises derives from GazeError (D7), so one
         # handler covers the lot. A traceback here would be noise: these are

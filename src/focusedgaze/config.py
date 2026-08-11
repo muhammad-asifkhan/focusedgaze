@@ -286,9 +286,15 @@ class LandmarkConfig:
         _set_number(self, "crop_padding", minimum=0.0)
 
 
+#: The gaze backends this build can load. Every other field of
+#: :class:`ModelConfig` describes the L2CS decode and is ignored by the Intel
+#: backend, which carries its geometry inside the graph.
+_BACKENDS: Final[tuple[str, ...]] = ("l2cs", "intel")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
-    """How the L2CS-Net ONNX graph is fed and how its output is decoded.
+    """How the gaze model is fed and how its output is decoded.
 
     Args:
         bins: Number of angle bins the model emits per axis.
@@ -312,6 +318,16 @@ class ModelConfig:
     plausible, smooth, wrong answer rather than a crash. Audit 32.6b.
     """
 
+    #: Which gaze model to load. ``"l2cs"`` is the original and remains the
+    #: default so no existing profile, fixture or measurement changes meaning.
+    #: ``"intel"`` selects ``gaze-estimation-adas-0002``, which is Apache-2.0
+    #: (so it can ship in the wheel) and measured at 2.16 ms on CPU against
+    #: L2CS's 141.7 ms through DirectML on the same machine.
+    #:
+    #: The two are **not interchangeable at runtime**: they have different angle
+    #: conventions and a profile calibrated against one does not apply to the
+    #: other. Switching backends means recalibrating.
+    backend: str = "l2cs"
     bins: int = 90                                                  # gaze_pipeline.py:17
     input_size: int = 448                                           # gaze_pipeline.py:51
     imagenet_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)  # gaze_pipeline.py:20
@@ -323,6 +339,9 @@ class ModelConfig:
     intra_op_num_threads: int = 4                                   # gaze_pipeline.py:25
 
     def __post_init__(self) -> None:
+        # Same helper CameraConfig uses for its own backend field, so an unknown
+        # value is rejected identically in both places.
+        _set_text(self, "backend", allowed=_BACKENDS)
         _set_number(self, "bins", minimum=1, integer=True)
         _set_number(self, "input_size", minimum=1, integer=True)
         _set_triple(self, "imagenet_mean")

@@ -18,6 +18,7 @@ import pytest
 from focusedgaze.config import GazeConfig, LandmarkConfig
 from focusedgaze.core.estimator import GazeEstimator
 from focusedgaze.core.landmarks import SmoothedBox, smoothed_square_box
+from focusedgaze.exceptions import CalibrationError
 from focusedgaze.types import FaceObservation, GazeStatus
 
 
@@ -190,6 +191,216 @@ def _estimator(faces, model=None, profile=None):
         landmarker=StubLandmarker(faces),
         model=model or StubModel(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Distance compensation, at the estimator.
+#
+# This changes the runtime mapping, so the thing worth pinning hardest is that
+# it does nothing at all unless it is asked for.
+# ---------------------------------------------------------------------------
+
+
+def _distance_profile(distance_cm=None):
+    """A profile mapping any angle to a fixed off-centre point, so the only
+    thing that can move the output is the rescaling."""
+    from focusedgaze.calibration import CalibrationProfile
+
+    return CalibrationProfile(
+        name="d", degree=1,
+        powers=np.array([[0, 0], [1, 0], [0, 1]], dtype=np.int64),
+        coef_x=np.zeros(3), coef_y=np.zeros(3),
+        intercept_x=0.25, intercept_y=0.5,
+        distance_cm=distance_cm,
+    )
+
+
+def _compensating_config(on: bool) -> GazeConfig:
+    from dataclasses import replace
+
+    base = GazeConfig()
+    return replace(base, positioning=replace(base.positioning, compensate_distance=on))
+
+
+def test_compensation_is_off_by_default() -> None:
+    assert GazeConfig().positioning.compensate_distance is False
+
+
+def test_a_default_estimator_does_not_rescale(monkeypatch) -> None:
+    """The guarantee that makes this safe to add: existing behaviour is
+    untouched unless the flag is set."""
+    est = GazeEstimator(
+        profile=_distance_profile(47.0), config=GazeConfig(),
+        landmarker=StubLandmarker([_face(0.5, 0.5)]), model=StubModel(),
+    )
+    result = est.process(np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0)
+    assert result.ok
+    assert result.x == pytest.approx(0.25), "the prediction was altered with the flag off"
+
+
+def test_a_profile_with_no_distance_is_never_rescaled() -> None:
+    """Even with compensation on. Nothing already on disk changes behaviour."""
+    est = GazeEstimator(
+        profile=_distance_profile(None), config=_compensating_config(True),
+        landmarker=StubLandmarker([_face(0.5, 0.5)]), model=StubModel(),
+    )
+    result = est.process(np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0)
+    assert result.ok
+    assert result.x == pytest.approx(0.25)
+
+
+def _face_with_eyes(cx=0.5, cy=0.5, ipd=0.10):
+    """A face whose iris centres are actually apart, so the positioning gate can
+    estimate a distance. `_face` puts every landmark on one point, which gives an
+    inter-pupil distance of zero and therefore no distance at all.
+
+    The default separation is chosen to land inside the 45-65 cm zone: distance
+    is inversely proportional to the pupil separation in pixels, and a narrower
+    face reads as further away and gets rejected as OUT_OF_RANGE before any
+    correction is reached.
+    """
+    from focusedgaze.core.positioning import LEFT_IRIS_CENTER, RIGHT_IRIS_CENTER
+
+    marks = _face(cx, cy)
+    marks[LEFT_IRIS_CENTER] = Landmark(cx - ipd / 2, cy)
+    marks[RIGHT_IRIS_CENTER] = Landmark(cx + ipd / 2, cy)
+    return marks
+
+
+def test_compensation_stretches_the_prediction_when_enabled() -> None:
+    """With a distance recorded and the flag on, a reading taken further away
+    than the calibration is pushed back out toward where it belongs."""
+    face = _face_with_eyes()
+    measured = GazeEstimator(
+        profile=_distance_profile(None), config=_compensating_config(True),
+        landmarker=StubLandmarker([face]), model=StubModel(),
+    ).process(np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0)
+    assert measured.distance_cm is not None, "the stub face yields no distance"
+
+    est = GazeEstimator(
+        profile=_distance_profile(47.0), config=_compensating_config(True),
+        landmarker=StubLandmarker([face]), model=StubModel(),
+    )
+    result = est.process(np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0)
+    assert result.ok
+
+    expected = 0.5 + (0.25 - 0.5) * (measured.distance_cm / 47.0)
+    expected = max(0.0, min(1.0, expected))
+    assert result.x == pytest.approx(expected, abs=1e-9)
+    assert result.x != pytest.approx(0.25), "the correction did nothing"
+
+
+# ---------------------------------------------------------------------------
+# Session recentring.
+#
+# A profile fixes the shape of the mapping, not its position. Across five
+# measured runs the whole mapping shifted bodily between sessions -- by -0.25 to
+# +0.34 of screen height, twice on an identical profile minutes apart.
+# ---------------------------------------------------------------------------
+
+
+def _centred_estimator(profile=None, config=None):
+    return GazeEstimator(
+        profile=profile if profile is not None else _distance_profile(),
+        config=config or GazeConfig(),
+        landmarker=StubLandmarker([_face_with_eyes()]),
+        model=StubModel(),
+    )
+
+
+def _read(est):
+    return est.process(np.zeros((480, 640, 3), dtype=np.uint8), timestamp=0.0)
+
+
+def test_a_fresh_estimator_has_no_offset() -> None:
+    assert _centred_estimator().offset == (0.0, 0.0)
+
+
+def test_recentring_moves_the_reading_onto_the_target() -> None:
+    """The whole promise: look at the centre, say so, and the centre is where
+    the tracker now reports you looking.
+
+    Two estimators rather than one read before and one after: the One Euro
+    filter is stateful, so a second reading through the same estimator is
+    smoothed toward the first and lands between them.
+    """
+    plain = _centred_estimator()        # maps every angle to (0.25, 0.5)
+    assert _read(plain).x == pytest.approx(0.25)
+
+    est = _centred_estimator()
+    est.recentre([(StubModel().pitch, StubModel().yaw)])
+
+    after = _read(est)
+    assert after.x == pytest.approx(0.5, abs=1e-9)
+    assert after.y == pytest.approx(0.5, abs=1e-9)
+
+
+def test_recentring_can_target_any_point() -> None:
+    est = _centred_estimator()
+    est.recentre([(StubModel().pitch, StubModel().yaw)], target=(0.1, 0.9))
+    result = _read(est)
+    assert (result.x, result.y) == pytest.approx((0.1, 0.9), abs=1e-9)
+
+
+def test_the_median_is_used_so_a_blink_does_not_matter() -> None:
+    """No supervision is expected of the caller, so an outlier must not shift
+    the correction."""
+    est = _centred_estimator()
+    good = (StubModel().pitch, StubModel().yaw)
+    est.recentre([good, good, (5.0, -5.0), good, good])
+    assert _read(est).x == pytest.approx(0.5, abs=1e-9)
+
+
+def test_an_offset_survives_tracking_loss() -> None:
+    """`reset` forgets per-stream state. The offset describes where the user is
+    sitting, and losing it because a face flickered would silently undo the
+    correction."""
+    est = _centred_estimator()
+    est.recentre([(StubModel().pitch, StubModel().yaw)])
+    offset = est.offset
+    est.reset()
+    assert est.offset == offset
+
+
+def test_clearing_the_offset_restores_the_raw_mapping() -> None:
+    est = _centred_estimator()
+    est.recentre([(StubModel().pitch, StubModel().yaw)])
+    est.clear_offset()
+    assert est.offset == (0.0, 0.0)
+    assert _read(est).x == pytest.approx(0.25)
+
+
+def test_recentring_without_a_profile_is_refused() -> None:
+    """It corrects where a profile lands. With no profile there is nothing to
+    correct, and silently doing nothing would look like it worked."""
+    est = GazeEstimator(
+        profile=None, config=GazeConfig(),
+        landmarker=StubLandmarker([_face_with_eyes()]), model=StubModel(),
+    )
+    with pytest.raises(CalibrationError, match="profile"):
+        est.recentre([(0.1, 0.2)])
+
+
+def test_recentring_with_no_usable_readings_is_refused() -> None:
+    est = _centred_estimator()
+    with pytest.raises(CalibrationError, match="no usable readings"):
+        est.recentre([])
+    with pytest.raises(CalibrationError, match="no usable readings"):
+        est.recentre([(float("nan"), 0.1), (0.2, float("inf"))])
+
+
+def test_a_non_finite_offset_is_refused() -> None:
+    """A NaN here would poison every later reading rather than failing."""
+    est = _centred_estimator()
+    with pytest.raises(CalibrationError, match="finite"):
+        est.set_offset(float("nan"), 0.0)
+
+
+def test_a_recentred_reading_cannot_leave_the_screen() -> None:
+    est = _centred_estimator()
+    est.set_offset(-0.9, -0.9)
+    result = _read(est)
+    assert 0.0 <= result.x <= 1.0 and 0.0 <= result.y <= 1.0
 
 
 def test_two_estimators_in_one_process_do_not_interfere() -> None:

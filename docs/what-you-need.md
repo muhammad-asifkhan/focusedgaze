@@ -41,6 +41,13 @@ looking at.**
 | `face_landmarker.task` | 3.8 MB | **Downloads automatically.** Apache-2.0. |
 | Gaze model (ONNX) | ~91 MB | **You fetch this yourself.** The tool prints instructions and stops. |
 
+The gaze model is obtained once by one person: download `L2CSNet_gaze360.pkl` from the
+[official L2CS-Net distribution](https://github.com/Ahmednull/L2CS-Net) and run
+`focusedgaze setup --weights <path>`. The resulting `.onnx` is **portable** — the
+execution provider is chosen at load time, so the same file works on another GPU vendor
+or another OS. Everyone else runs `focusedgaze setup --onnx <path>`, or points
+`FOCUSEDGAZE_MODEL_DIR` at a shared copy, and needs neither torch nor the download.
+
 The second one is not laziness. Those weights come from the Gaze360 dataset,
 which is **non-commercial research only**. The package will not download or
 redistribute them for you. If your use is commercial, resolve the licence before
@@ -54,8 +61,10 @@ going further, not after.
 - per **machine** (a different camera and screen is a different geometry)
 - per **seating position** (move the laptop, redo it)
 
-It takes about two minutes: you follow a dot around the screen. Without it you
-get gaze *angles* but no screen *position*.
+It takes about a minute: a positioning check, then a dot sweeps the screen for 45
+seconds and you follow it with your eyes. Without it you get gaze *angles* but no
+screen *position*. Afterwards you are shown how well the sweep covered each region,
+and the fit is refused if it missed one entirely.
 
 ### 5. Per frame, at runtime
 
@@ -171,12 +180,15 @@ Full per-point numbers in [accuracy.md](accuracy.md).
 ## Part 4: Start to finish
 
 ```bash
-pip install focusedgaze[directml]   # 1. install, pick a provider
-focusedgaze download-models          # 2. get models (one is manual)
-focusedgaze check                    # 3. confirm camera, provider, models
-focusedgaze calibrate                # 4. ~2 min, follow the dot
-focusedgaze demo                     # 5. confirm it follows your eyes
+pip install focusedgaze[directml]                 # 1. install, pick a provider
+focusedgaze setup --weights L2CSNet_gaze360.pkl   # 2. models + provider, one command
+focusedgaze check                                 # 3. confirm camera and lighting
+focusedgaze calibrate --name you                  # 4. ~45 s, follow the dot
+focusedgaze demo --profile you                    # 5. confirm it follows your eyes
 ```
+
+Run `focusedgaze setup` with no arguments first: it tells you exactly what is
+missing, including where to get the checkpoint it will not fetch for you.
 
 Then:
 
@@ -193,14 +205,19 @@ if result.ok:
 
 ## Honest status
 
-Not all of the above is built yet. This page describes the finished product.
+All of the above is built. This page used to describe a finished product that did
+not exist yet; it now describes the one in the repository.
 
-| Working now | Not yet |
+| Working now | Caveats |
 |---|---|
-| Config, result types, errors | `GazeEstimator` itself |
-| Smoothing, positioning gate | The camera layer |
-| Model registry and downloader | The CLI commands |
-| Calibration (**numbers not yet verified**) | The WebSocket server |
+| Config, result types, errors | |
+| Smoothing, positioning gate | |
+| Model registry and downloader | The gaze weights are never fetched. That is deliberate. |
+| `GazeEstimator`, the camera layer, `WebcamGazeTracker` | |
+| All eight CLI commands, including an interactive `calibrate` | Needs a desktop session to draw the dot |
+| Calibration and the accuracy grid | Accuracy numbers are from two runs, and they disagreed by 2x |
+| The WebSocket server | |
 
-See [usage.md](usage.md) for what runs today, with examples that were actually
+Still true: this is **0.0.0** and the PyPI release is not a working package. Install
+from the repository. See [usage.md](usage.md) for examples that were actually
 executed. If this page and the code disagree, **the code is right**.

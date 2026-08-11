@@ -231,6 +231,24 @@ def _as_optional_error(value: object, field: str) -> float | None:
     return out
 
 
+def _as_optional_distance(value: object) -> float | None:
+    """Validate a recorded calibration distance.
+
+    Rejects zero as well as negatives: it is a divisor in
+    :meth:`CalibrationProfile.distance_scale`, and a stored zero would turn a
+    correction into a division by zero at the worst possible moment -- inside a
+    running tracker, on somebody's face.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str | bytes) or not isinstance(value, (int, float, np.floating)):
+        raise CalibrationError(f"distance_cm must be a number or None, got {value!r}")
+    out = float(value)
+    if not np.isfinite(out) or out <= 0.0:
+        raise CalibrationError(f"distance_cm must be finite and positive, got {out!r}")
+    return out
+
+
 @dataclass(frozen=True, eq=False)
 class CalibrationProfile:
     """A fitted (pitch, yaw) -> normalised (x, y) polynomial, and its provenance.
@@ -289,6 +307,15 @@ class CalibrationProfile:
     intercept_y: float
     screen_size: tuple[int, int] | None = None
     camera_size: tuple[int, int] | None = DEFAULT_CAMERA_SIZE
+    #: Median eye-to-camera distance while the samples were collected, in cm, or
+    #: ``None`` for a profile fitted before this was recorded. **This is not
+    #: metadata.** A calibration is only valid at the distance it was taught at:
+    #: screen offset for a fixed gaze angle scales with viewing distance, so a
+    #: profile learned at 47 cm and used at 64 cm under-reaches by roughly the
+    #: ratio of the two. Measured on this project: gains of 0.61 and 0.67 against
+    #: a geometric prediction of 0.71-0.78 for exactly that mismatch. See
+    #: :meth:`rescaled_for`.
+    distance_cm: float | None = None
     created_at: str = ""
     validation_error: float | None = None
     fit_error: float | None = None
@@ -364,6 +391,7 @@ class CalibrationProfile:
         set_(self, "coef_y", coef_y)
         set_(self, "intercept_x", intercept_x)
         set_(self, "intercept_y", intercept_y)
+        set_(self, "distance_cm", _as_optional_distance(self.distance_cm))
         set_(self, "screen_size", _as_size(self.screen_size, "screen_size"))
         set_(self, "camera_size", _as_size(self.camera_size, "camera_size"))
         set_(self, "created_at", self.created_at or _utc_now_iso())
@@ -421,6 +449,84 @@ class CalibrationProfile:
         Raises:
             CalibrationError: If either input is not finite.
         """
+        low, high = self.clamp
+        x, y = self.apply_raw(pitch, yaw)
+        return (max(low, min(high, x)), max(low, min(high, y)))
+
+    def distance_scale(self, distance_cm: float | None) -> float:
+        """How far to stretch this profile's output for a new viewing distance.
+
+        THE GEOMETRY
+        ------------
+        A gaze angle does not name a screen point on its own. The point it hits
+        is roughly ``distance * tan(angle)`` from straight ahead, so the same
+        eyeball rotation reaches **further** across the screen the further away
+        you sit. A polynomial fitted at one distance therefore has the wrong gain
+        at any other: used further away than it was taught, it under-reaches and
+        everything collapses toward the centre of the screen.
+
+        Returns ``distance_cm / self.distance_cm``, or ``1.0`` when either is
+        unknown -- an unrecorded distance must leave the mapping untouched rather
+        than guess at one.
+
+        MEASURED, NOT ASSUMED
+        ---------------------
+        A profile taught at roughly 45-50 cm and measured at 63.7 cm produced
+        gains of x=0.67 and y=0.61, against 0.71-0.78 predicted by this ratio.
+        The residual gap is consistent with a noisy fit attenuating the gain
+        further, so this corrects the dominant term and not all of it.
+
+        The small-angle approximation this rests on holds near the middle of the
+        screen and degrades toward the corners, where ``tan`` stops being linear.
+        It is a first-order correction, not a substitute for calibrating at the
+        distance you actually sit at.
+        """
+        if not self.distance_cm or not distance_cm:
+            return 1.0
+        if self.distance_cm <= 0 or distance_cm <= 0:
+            return 1.0
+        return float(distance_cm) / float(self.distance_cm)
+
+    def rescaled_for(
+        self, x: float, y: float, distance_cm: float | None, *, centre: float = 0.5
+    ) -> tuple[float, float]:
+        """Stretch a predicted point about the screen centre for a new distance.
+
+        Args:
+            x: Predicted horizontal position, normalised.
+            y: Predicted vertical position, normalised.
+            distance_cm: Where the user is now. ``None`` leaves the point alone.
+            centre: The fixed point of the scaling. The optical axis, in effect:
+                looking straight ahead lands in the same place at any distance,
+                and everything else moves relative to it.
+
+        Returns the point clamped to :attr:`clamp`, as :meth:`apply` does, so a
+        stretch cannot push a prediction off the screen.
+        """
+        scale = self.distance_scale(distance_cm)
+        if scale == 1.0:
+            return (x, y)
+        low, high = self.clamp
+        sx = centre + (x - centre) * scale
+        sy = centre + (y - centre) * scale
+        return (max(low, min(high, sx)), max(low, min(high, sy)))
+
+    def apply_raw(self, pitch: float, yaw: float) -> tuple[float, float]:
+        """:meth:`apply` without the clamp. **Diagnostics, not the runtime path.**
+
+        The clamp exists because the polynomial extrapolates without limit
+        outside the calibrated range, and an application cannot draw a cursor off
+        the screen anyway. But it also destroys the evidence for the largest
+        error this system has: when a session's mapping shifts bodily off one
+        edge, every affected point reads as sitting exactly on that edge, and how
+        far past it the model actually pointed is unrecoverable.
+
+        `focusedgaze accuracy` records this alongside the clamped value so the
+        offset can be measured. Nothing in the live pipeline calls it.
+
+        Raises:
+            CalibrationError: If either input is not finite.
+        """
         if not (np.isfinite(pitch) and np.isfinite(yaw)):
             raise CalibrationError(f"gaze angles must be finite, got ({pitch!r}, {yaw!r})")
         # Scalar evaluation, one reading at a time, exactly as the legacy
@@ -429,11 +535,14 @@ class CalibrationProfile:
         # `fitter.robust_fit_samples` compares residuals against a threshold, so
         # a one-ULP difference there could change WHICH samples get rejected and
         # therefore what the final coefficients are.
+        #
+        # `apply` delegates here rather than duplicating the arithmetic, so the
+        # two cannot drift apart: same terms, same dot product, same order. The
+        # golden fixtures pin that they still agree.
         terms = self._terms(np.float64(pitch), np.float64(yaw))
-        low, high = self.clamp
         x = float(terms @ self.coef_x) + self.intercept_x
         y = float(terms @ self.coef_y) + self.intercept_y
-        return (max(low, min(high, x)), max(low, min(high, y)))
+        return (x, y)
 
     def apply_array(
         self, pitch: object, yaw: object,
@@ -488,6 +597,12 @@ class CalibrationProfile:
             "clamp": list(self.clamp),
             "screen_size": list(self.screen_size) if self.screen_size else None,
             "camera_size": list(self.camera_size) if self.camera_size else None,
+            # Added without bumping schema_version, deliberately. The version
+            # check on read is strict equality, so a bump would reject every
+            # profile anyone already has; an optional field read with .get() is
+            # both backward compatible (old profiles simply lack it) and forward
+            # compatible (an older build ignores it).
+            "distance_cm": self.distance_cm,
             "validation_error": self.validation_error,
             "fit_error": self.fit_error,
             "n_samples": self.n_samples,
@@ -565,6 +680,7 @@ class CalibrationProfile:
             intercept_y=intercept_y,
             screen_size=_as_size(data.get("screen_size"), "screen_size"),
             camera_size=_as_size(data.get("camera_size"), "camera_size"),
+            distance_cm=_as_optional_distance(data.get("distance_cm")),
             created_at=str(data.get("created_at") or ""),
             validation_error=_as_optional_error(data.get("validation_error"), "validation_error"),
             fit_error=_as_optional_error(data.get("fit_error"), "fit_error"),

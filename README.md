@@ -3,16 +3,23 @@
 Webcam eye-gaze tracking as a Python library. Point a laptop camera at a face and get a
 screen coordinate.
 
-> **Status: the pipeline is complete (0.0.0).** `GazeEstimator`, `WebcamGazeTracker`, the
-> capture layer, calibration, the asset registry, the WebSocket server and all six CLI
-> commands are implemented and tested. The extraction reproduces the original pipeline
-> **bit-identically** on 60 recorded frames: 60/60 identical, zero crop-box differences.
-> See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) §49.
+> **Status: the pipeline is complete (0.0.0), and it is now runnable end to end.**
+> `GazeEstimator`, `WebcamGazeTracker`, the capture layer, calibration, the asset registry,
+> the WebSocket server and all eight CLI commands are implemented and tested. The
+> extraction reproduces the original pipeline **bit-identically** on 60 recorded frames:
+> 60/60 identical, zero crop-box differences. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) §49.
+>
+> **`focusedgaze calibrate` now runs a real session**: a positioning check, a smooth-pursuit
+> sweep on a full-screen canvas, per-region coverage accounting, and a robust fit. Until
+> that landed, the collection loops existed but nothing drew a dot, so the command
+> refused to start and the library could not produce screen coordinates for anybody.
+> `focusedgaze accuracy` draws its grid for the same reason.
 >
 > Still 0.0.0 and not yet released as a functional package: packaging verification and the
 > release are Phases 9 and 10.
 >
-> If something is not working, run `focusedgaze check --no-camera` first.
+> If something is not working, run `focusedgaze setup` first, then
+> `focusedgaze check --no-camera`.
 >
 > **CI is green** on Python 3.12, 3.13 and 3.14. It was red for five pushes on a platform
 > assumption in the asset registry, since fixed. See `MIGRATION_AUDIT.md` §42.

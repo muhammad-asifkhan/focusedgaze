@@ -56,6 +56,7 @@ from typing import Any, Literal
 
 from ..exceptions import ConfigError, ModelNotFoundError
 from .registry import (
+    DEFAULT_BACKEND,
     ModelAsset,
     cache_dir,
     get_asset,
@@ -378,6 +379,7 @@ def ensure(
 def ensure_all(
     *,
     allow_download: bool = True,
+    backend: str = DEFAULT_BACKEND,
     env: Mapping[str, str] | None = None,
     transport: Transport = urllib_transport,
     timeout: float = DEFAULT_TIMEOUT,
@@ -390,6 +392,12 @@ def ensure_all(
     behaviour rather than a fault, and a command that aborted on it could not go
     on to report that the landmarker is fine.
 
+    Args:
+        allow_download: Whether anything may be fetched.
+        backend: Which gaze backend's assets to resolve. Only one runs at a
+            time, so fetching or reporting on the other's weights would be work
+            and noise about a file the user has no reason to own.
+
     Returns:
         One :class:`AssetReport` per runtime asset, in registry order. A caller
         deciding an exit code should look at the reports whose asset has
@@ -399,7 +407,7 @@ def ensure_all(
     override = model_dir_override(env)
     where = override if override is not None else cache_dir()
     reports: list[AssetReport] = []
-    for asset in runtime_assets():
+    for asset in runtime_assets(backend):
         # Sampled before the call so "present" and "downloaded" can be told
         # apart afterwards. `ensure` deliberately does not report which it did.
         existed = asset.path_in(where).exists()
