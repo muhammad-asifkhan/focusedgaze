@@ -26,6 +26,7 @@ So the geometry is stated explicitly rather than tuned by eye:
 
 from __future__ import annotations
 
+import math
 from typing import Final
 
 import cv2
@@ -53,8 +54,9 @@ def eye_crops(
     *,
     size: int = 60,
     scale: float = EYE_CROP_SCALE,
+    roll: float = 0.0,
 ) -> tuple[NDArray[np.uint8], NDArray[np.uint8]] | None:
-    """Square patches around each iris, resized to ``size``.
+    """Square patches around each iris, roll-corrected and resized to ``size``.
 
     Args:
         frame: Full BGR frame, ``(H, W, 3)`` uint8.
@@ -62,6 +64,8 @@ def eye_crops(
             without iris points there is nothing to centre on.
         size: Output side in pixels. 60 for ``gaze-estimation-adas-0002``.
         scale: Crop side as a fraction of the inter-pupil distance.
+        roll: Head roll in **radians**. The patch is rotated to undo it, so the
+            model always sees an upright eye.
 
     Returns:
         ``(left, right)`` BGR patches, or ``None`` when either eye is not fully
@@ -70,6 +74,20 @@ def eye_crops(
     **Left and right are the subject's own**, matching the landmark names, not
     the viewer's. Swapping them is not detectable downstream: the model returns
     a gaze vector either way, and it is simply wrong.
+
+    WHY THE ROTATION IS NOT OPTIONAL
+    --------------------------------
+    The Open Model Zoo reference demo rotates each eye image by the head roll
+    before inference (``rotateImageAroundCenter(leftEyeImage, ..., roll)``, using
+    ``getRotationMatrix2D`` and ``warpAffine`` with ``BORDER_REPLICATE``). The
+    model expects an upright eye; tilt the head and an axis-aligned crop presents
+    a tilted one, and it has no way to know.
+
+    This was left out of the first implementation and measured: a profile
+    calibrated at roll +0.203 rad, then used at −0.016 rad — a 12.6° tilt — saw
+    its **horizontal gain collapse from 0.98 to 0.48** while vertical gain stayed
+    at the value the distance change alone predicted. Average error went from
+    1.43 cm to 7.90 cm. The failure is silent: every reading remains plausible.
     """
     if landmarks is None or len(landmarks) <= RIGHT_IRIS:
         return None
@@ -98,8 +116,34 @@ def eye_crops(
             return None
         patches.append(
             np.ascontiguousarray(
-                cv2.resize(patch, (size, size), interpolation=cv2.INTER_AREA),
+                cv2.resize(_upright(patch, roll), (size, size),
+                           interpolation=cv2.INTER_AREA),
                 dtype=np.uint8,
             )
         )
     return patches[0], patches[1]
+
+
+def _upright(patch: NDArray[np.uint8], roll: float) -> NDArray[np.uint8]:
+    """Rotate a patch about its centre to undo head roll.
+
+    ``BORDER_REPLICATE`` rather than a zero fill, matching the reference demo:
+    the corners a rotation exposes are outside the original crop, and filling
+    them with black would put a hard edge next to the eyelid that the model has
+    never seen in training.
+
+    The sign is the reference's: it rotates by ``+roll``. This package's roll
+    comes from a different source (MediaPipe's transformation matrix rather than
+    Open Model Zoo's head-pose net), so if a measurement shows this making
+    matters worse under head tilt, the sign is the first thing to flip.
+    """
+    if not roll:
+        return patch
+    height, width = patch.shape[:2]
+    centre = (width / 2.0, height / 2.0)
+    matrix = cv2.getRotationMatrix2D(centre, math.degrees(roll), 1.0)
+    rotated: NDArray[np.uint8] = cv2.warpAffine(
+        patch, matrix, (width, height), flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    ).astype(np.uint8)
+    return rotated

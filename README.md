@@ -28,6 +28,7 @@ screen coordinate.
 
 | Start here | For |
 |---|---|
+| [docs/getting-started.md](docs/getting-started.md) | **Start here.** Install to a working gaze-controlled app, step by step, including swapping the model. |
 | [docs/what-you-need.md](docs/what-you-need.md) | **What you must supply and what you get back.** The short version. |
 | [docs/complete-usage.md](docs/complete-usage.md) | The full guide to the finished product, every section status-marked. |
 | [docs/usage.md](docs/usage.md) | What runs **today**, with examples that were executed. |

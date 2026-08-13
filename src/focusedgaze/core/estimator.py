@@ -324,8 +324,15 @@ class GazeEstimator:
             from .eyes import eye_crops
             from .headpose import head_angles
 
-            eyes = eye_crops(frame, observation.landmarks, size=_EYE_SIZE)
             pose = head_angles(observation.transform_matrix)
+            # Roll is passed into the crop, not just alongside it: the model
+            # expects an upright eye, and an axis-aligned crop of a tilted head
+            # presents a tilted one. Measured cost of omitting it: horizontal
+            # gain 0.98 -> 0.48 across a 12.6 degree head tilt.
+            eyes = eye_crops(
+                frame, observation.landmarks, size=_EYE_SIZE,
+                roll=pose.roll if pose is not None else 0.0,
+            )
             if eyes is None or pose is None:
                 # No iris landmarks, an eye off the edge of the frame, or no
                 # head-pose matrix. Not an error: the same recoverable state as

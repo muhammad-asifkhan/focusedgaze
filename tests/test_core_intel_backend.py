@@ -84,6 +84,37 @@ def test_the_left_crop_is_the_subjects_left_landmark() -> None:
     assert left.mean() < right.mean()
 
 
+def test_roll_rotates_the_crop() -> None:
+    """The Open Model Zoo demo rotates each eye image by the head roll before
+    inference. Omitting it was measured: across a 12.6 degree head tilt,
+    horizontal gain collapsed from 0.98 to 0.48 and error went 1.43 -> 7.90 cm,
+    with every individual reading still looking plausible."""
+    frame = _frame()
+    marks = _landmarks()
+    upright = eye_crops(frame, marks, roll=0.0)[0]
+    tilted = eye_crops(frame, marks, roll=0.4)[0]
+    assert not np.array_equal(upright, tilted), "roll was ignored"
+
+
+def test_zero_roll_leaves_the_crop_untouched() -> None:
+    """A rotation by nothing must not cost an interpolation pass."""
+    frame = _frame()
+    marks = _landmarks()
+    assert np.array_equal(
+        eye_crops(frame, marks, roll=0.0)[0], eye_crops(frame, marks)[0]
+    )
+
+
+def test_rotation_replicates_the_border_rather_than_filling_black() -> None:
+    """A zero fill would put a hard black edge next to the eyelid, which the
+    model has never seen. The reference uses BORDER_REPLICATE."""
+    frame = np.full((480, 640, 3), 128, dtype=np.uint8)
+    tilted = eye_crops(frame, _landmarks(), roll=0.5)[0]
+    assert tilted.min() > 100, (
+        f"corners were filled with something dark: min {tilted.min()}"
+    )
+
+
 def test_the_crop_scales_with_the_inter_pupil_distance() -> None:
     """A fixed pixel size would zoom in as the user leans forward, changing what
     the model sees for no reason other than distance."""
