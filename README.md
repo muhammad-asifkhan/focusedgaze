@@ -3,36 +3,40 @@
 Webcam eye-gaze tracking as a Python library. Point a laptop camera at a face and get a
 screen coordinate.
 
-> **Status: the pipeline is complete (0.0.0), and it is now runnable end to end.**
-> `GazeEstimator`, `WebcamGazeTracker`, the capture layer, calibration, the asset registry,
-> the WebSocket server and all eight CLI commands are implemented and tested. The
-> extraction reproduces the original pipeline **bit-identically** on 60 recorded frames:
-> 60/60 identical, zero crop-box differences. See [MIGRATION_AUDIT.md](MIGRATION_AUDIT.md) §49.
+> **Status: 0.1.0, the first release that does anything.** `0.0.0` on PyPI is a
+> placeholder whose modules are almost all stubs; it cannot be replaced, because PyPI
+> never permits re-uploading a version. Install `0.1.0` or later.
 >
-> **`focusedgaze calibrate` now runs a real session**: a positioning check, a smooth-pursuit
-> sweep on a full-screen canvas, per-region coverage accounting, and a robust fit. Until
-> that landed, the collection loops existed but nothing drew a dot, so the command
-> refused to start and the library could not produce screen coordinates for anybody.
-> `focusedgaze accuracy` draws its grid for the same reason.
+> Everything is implemented and tested: `GazeEstimator`, `WebcamGazeTracker`, the capture
+> layer, interactive calibration, the asset registry, the WebSocket server, a dwell-based
+> control layer, and all eight CLI commands. The extraction reproduces the original
+> pipeline **bit-identically** on 60 recorded frames. See
+> [MIGRATION_AUDIT.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/MIGRATION_AUDIT.md) §49.
 >
-> Still 0.0.0 and not yet released as a functional package: packaging verification and the
-> release are Phases 9 and 10.
+> **Two gaze backends.** Intel's `gaze-estimation-adas-0002` is Apache-2.0, downloads
+> automatically, and was measured at **2.0 ms per frame on a plain CPU**. L2CS-Net is the
+> default for backward compatibility but its weights derive from Gaze360 and cannot be
+> redistributed, so you must fetch them yourself. Pass `--backend intel` to use the one
+> that just works.
 >
-> If something is not working, run `focusedgaze setup` first, then
-> `focusedgaze check --no-camera`.
+> **New here?** Read
+> [docs/getting-started.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/getting-started.md).
+> If something is not working, run `focusedgaze setup` then `focusedgaze check`.
 >
-> **CI is green** on Python 3.12, 3.13 and 3.14. It was red for five pushes on a platform
-> assumption in the asset registry, since fixed. See `MIGRATION_AUDIT.md` §42.
+> **Known issue in 0.1.0:** the eye-crop roll correction follows the Open Model Zoo
+> reference, but this package derives head roll from MediaPipe rather than Open Model Zoo's
+> head-pose network. If the two disagree in sign, accuracy degrades under head tilt rather
+> than improving. To be settled in 0.1.1.
 
 ### Documentation
 
 | Start here | For |
 |---|---|
-| [docs/getting-started.md](docs/getting-started.md) | **Start here.** Install to a working gaze-controlled app, step by step, including swapping the model. |
-| [docs/what-you-need.md](docs/what-you-need.md) | **What you must supply and what you get back.** The short version. |
-| [docs/complete-usage.md](docs/complete-usage.md) | The full guide to the finished product, every section status-marked. |
-| [docs/usage.md](docs/usage.md) | What runs **today**, with examples that were executed. |
-| [docs/wire_format.md](docs/wire_format.md) | The WebSocket contract, read off the source. |
+| [docs/getting-started.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/getting-started.md) | **Start here.** Install to a working gaze-controlled app, step by step, including swapping the model. |
+| [docs/what-you-need.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/what-you-need.md) | **What you must supply and what you get back.** The short version. |
+| [docs/complete-usage.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/complete-usage.md) | The full guide to the finished product, every section status-marked. |
+| [docs/usage.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/usage.md) | What runs **today**, with examples that were executed. |
+| [docs/wire_format.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/wire_format.md) | The WebSocket contract, read off the source. |
 
 ---
 
@@ -40,10 +44,11 @@ screen coordinate.
 
 ```
 webcam frame
-  → MediaPipe face landmarks → smoothed square face crop
-  → L2CS-Net gaze model (ONNX) → (pitch, yaw)
+  → MediaPipe face landmarks → face crop, or per-eye crops + head pose
+  → gaze model (L2CS-Net via ONNX, or Intel via OpenVINO) → (pitch, yaw)
   → per-person polynomial calibration → (x, y) in [0, 1] over the screen
   → One Euro filter → steady coordinates
+  → optional dwell selection → "the user chose 'play'"
 ```
 
 ## What you need before any of it works
@@ -63,15 +68,26 @@ chair will get bad results until they calibrate for themselves.
 **The gaze model weights, which you fetch yourself.** focusedgaze will not download them.
 They derive from the Gaze360 dataset, which its authors restrict to non-commercial research
 use, so this project does not distribute or mirror them. This is a deliberate refusal, not
-a missing feature. See [Licence](#licence) below, and read [NOTICE](NOTICE) before you use
+a missing feature. See [Licence](#licence) below, and read [NOTICE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/NOTICE) before you use
 this commercially.
 
 ## Install
 
 ```bash
-pip install focusedgaze[directml]   # Windows GPU via DirectX 12
-pip install focusedgaze[cuda]       # NVIDIA
-pip install focusedgaze[cpu]        # anywhere
+pip install "focusedgaze[intel,calibration]"    # recommended: Apache-2.0 model, CPU, no GPU
+```
+
+That is the whole install. The Intel backend's weights are Apache-2.0, so they are fetched
+automatically and digest-verified, and at 0.139 GFLOPs they run at ~2 ms on a plain CPU.
+`calibration` adds scikit-learn, which is needed to **fit** a profile but not to apply one.
+
+To use L2CS-Net instead, pick an ONNX execution provider and supply the weights yourself
+(see [NOTICE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/NOTICE)):
+
+```bash
+pip install "focusedgaze[directml,calibration]"   # Windows GPU via DirectX 12
+pip install "focusedgaze[cuda,calibration]"       # NVIDIA
+pip install "focusedgaze[cpu,calibration]"        # anywhere
 ```
 
 Pick one. The base install is deliberately provider-agnostic: focusedgaze does not choose
@@ -146,7 +162,7 @@ the distance case: it enforces the 45–65 cm range the calibration was collecte
 > twenty minutes apart differed by a factor of two, and the failure pattern *inverted* between
 > them, so a single number would mislead. Accuracy depends more on how well your calibration
 > covered the screen than on anything else measured here. See
-> [docs/accuracy.md](docs/accuracy.md) and `MIGRATION_AUDIT.md` section 50.
+> [docs/accuracy.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/accuracy.md) and `MIGRATION_AUDIT.md` section 50.
 >
 > This replaces an earlier README claim of 2.0–2.4 cm, which had no source in this repository
 > and was deleted rather than repeated.
@@ -166,7 +182,7 @@ rather than aspirational, but nobody has pointed a camera at it there.
 
 ## Licence
 
-The code is MIT. See [LICENSE](LICENSE).
+The code is MIT. See [LICENSE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/LICENSE).
 
 The model weights are not, and this matters if you are evaluating focusedgaze for a product.
 The gaze model is an ONNX export of L2CS-Net trained on the **Gaze360** dataset, whose
@@ -176,6 +192,6 @@ focusedgaze does not ship them, does not mirror them, and will not download them
 You obtain them from the official L2CS-Net distribution and convert them locally.
 
 This is a conservative reading of the upstream terms and not legal advice. Full detail is in
-[NOTICE](NOTICE).
+[NOTICE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/NOTICE).
 
 Author: Muhammad Asif Khan, <https://github.com/muhammad-asifkhan>
