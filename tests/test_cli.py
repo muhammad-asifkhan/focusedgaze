@@ -36,15 +36,22 @@ def run(*argv: str) -> tuple[int, str]:
 # ---------------------------------------------------------------------------
 
 
-def test_version_prints_the_package_version() -> None:
+def test_version_prints_the_package_version(capsys) -> None:
+    """`--version` reports whatever `__init__` says, whatever that is.
+
+    This used to assert the literal ``"0.0.0"``, which broke on the first
+    release and never tested the thing it claimed to: that the version is
+    single-sourced from ``__init__`` (D6). Pinning the literal only pins the
+    literal. Comparing the *output* to ``__version__`` is the actual invariant,
+    and it survives every bump.
+    """
     from focusedgaze import __version__
 
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0
-    # argparse writes --version to stdout itself and exits; the value is what
-    # matters and it is single-sourced from __init__ (D6).
-    assert __version__ == "0.0.0"
+    # argparse writes --version to stdout itself and exits.
+    assert __version__ in capsys.readouterr().out
 
 
 def test_no_arguments_prints_help_and_succeeds() -> None:
