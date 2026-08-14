@@ -100,9 +100,49 @@ unimplemented feature. See `NOTICE`.
 that already contains the files. It takes precedence over the cache and skips all
 network access.
 
-### 3.2 `focusedgaze calibrate` **[SHIPPED]**, except interactive capture
+### 3.2 `focusedgaze calibrate` **[SHIPPED]**, interactive capture included
 
-Profile management works now:
+```bash
+focusedgaze calibrate --name alice        # pursuit: ~45 s, follow the moving dot
+focusedgaze calibrate --name alice --grid # dwell: look at 36 static dots in turn
+focusedgaze calibrate --no-preflight      # skip the positioning check
+focusedgaze calibrate --force             # fit even with an uncovered region
+```
+
+Both modes begin with a **positioning check** that holds until you are 45-65 cm away
+and centred, then a 3-2-1 countdown. Escape or q stops at any point and saves
+nothing. Afterwards you get per-region coverage and a robust fit.
+
+**Pursuit** (the default) moves a dot continuously and you follow it. The dot goes
+**hollow** whenever the frame is not being recorded, so a lost face is visible while
+it is still happening rather than in the coverage report afterwards.
+
+**Dwell** (`--grid`) shows static dots one at a time: hollow while you settle on it,
+solid while you are being measured. Slower per point, and worth it on slow hardware.
+
+### Which mode, and why it matters
+
+The dot is redrawn **once per pipeline iteration**, so its smoothness is your frame
+rate. On a machine running the gaze model at ~30 fps the pursuit dot glides and
+smooth pursuit works. At ~7 fps it *steps*, and a stepping target does not elicit
+smooth pursuit at all -- the eye makes catch-up saccades instead.
+
+Stretching `--seconds` to collect more samples makes this worse rather than better.
+At `--seconds 120` the dot takes **20 seconds** to cross the screen once, which is
+effectively stationary, and the eye wanders off it. Both failures put noise into
+`(pitch, yaw)` while the label stays confident, and noise in a least-squares
+predictor biases the fitted gain **toward zero**. Measured on a real run: 120 seconds
+collected 917 samples against 45 seconds' ~320, and *lost* horizontal gain (0.79 ->
+0.62) with held-out error rising from 0.089 to 0.163.
+
+So: check your rate with `focusedgaze check`, and if the gaze model is slower than
+about 15 fps, use `--grid`. A stationary target does not care how often it is redrawn.
+
+Afterwards it prints per-region coverage and **refuses to fit** if any region got no
+samples at all, because a polynomial fitted without them extrapolates into exactly
+the regions where users then report bad accuracy. `--force` overrides.
+
+Profile management works too:
 
 ```bash
 focusedgaze calibrate --list                              # * marks the active one
@@ -119,16 +159,24 @@ number of outliers dropped, and both the fit and held-out errors.
 `--migrate` converts a legacy pickled calibration into the JSON format. Keep the
 JSON: it loads without scikit-learn and does not execute code on load.
 
-**The smooth-pursuit routine exists** in `focusedgaze.calibration.ui`: the sweep
-path, sample collection against a tracker, per-region coverage accounting, and the
-drift measurement. What is not yet wired is the full-screen window that draws the
-dot, so `focusedgaze calibrate` with no action still lists what works rather than
-starting a session.
+The smooth-pursuit routine lives in `focusedgaze.calibration.ui` (sweep path, sample
+collection, coverage accounting, drift) and the full-screen canvas that draws the dot
+is `focusedgaze.calibration.screen`. They are separate modules on purpose: everything
+in `ui` is pure and runs in CI, and only the window needs a display. `DotRenderer`
+takes an injectable backend, which is how the dot's position is asserted on in CI
+without a screen.
 
 The sweep reports **coverage per screen region** after collecting, and warns when a
 region is thin or empty. That is the diagnostic worth having: accuracy depends more
 on how well the sweep covered the screen than on anything else measurable, and a
 region the dot never reached is where the polynomial will extrapolate.
+
+**`--rows` must be a multiple of 3, and defaults to 6.** Coverage is reported over a
+3x3 grid, and evenly spaced rows only divide evenly into three bands when their count
+does. The old default of 5 landed 2-1-2, so the middle third of the screen collected
+half the samples of the top and bottom on every run by every user -- measured at 362
+top, 187 middle, 368 bottom. No duration fixes that; longer sweeps scale all three
+bands and preserve the ratio. Six rows land 2-2-2.
 
 Calibration is **per person, per machine, and per seating position**. It is the
 file the whole system depends on. Move the laptop, change chairs, or swap users,
@@ -198,6 +246,21 @@ replaced got it wrong:
   calibration that produced it.
 
 Exit code is 0 for a complete measurement and 1 for an incomplete one.
+
+**It gates on position first**, exactly as `calibrate` does, and for a second
+reason: a profile is fitted from a held position, so measuring it from a different
+one measures the difference between two postures as much as it measures the
+profile. When only `calibrate` had the gate, two runs here reported a vertical
+offset of −0.246 and −0.272 — near-identical, so not somebody shifting in a chair
+but a reproducible consequence of gating one command and not the other. Use
+`--no-preflight` to skip it.
+
+**`--drift` forces the centre point's error to exactly zero.** It measures the
+offset at `(0.5, 0.5)` and subtracts it everywhere, so the point it was measured
+at necessarily lands perfectly, and the average is computed over eight real points
+and one guaranteed zero. That is worth having when you want the *shape* of the
+error with a constant offset removed. It is not the number to quote as accuracy.
+Compare uncorrected runs against uncorrected runs.
 
 ### 3.5 `focusedgaze demo` **[SHIPPED]**
 
@@ -554,11 +617,43 @@ changes, which is around 15-19 Hz. Nothing is sent when no client is connected.
 
 ```bash
 pip install focusedgaze[directml]
-focusedgaze download-models      # landmarker auto; gaze weights print instructions
-focusedgaze check                # confirm camera, provider, models
-focusedgaze calibrate            # sit normally, follow the dot
-focusedgaze demo                 # confirm the dot follows your eyes
+focusedgaze setup --weights L2CSNet_gaze360.pkl   # models + provider, in one command
+focusedgaze check                                 # confirm camera and lighting too
+focusedgaze calibrate --name alice                # ~45 s, follow the dot
+focusedgaze demo --profile alice                  # confirm it follows your eyes
+focusedgaze accuracy --profile alice              # measure how good it actually is
 ```
+
+`setup` converts the checkpoint straight into the directory the runtime reads. Run it
+without arguments first if you want it to tell you what is missing before you go
+looking for the file.
+
+### Doing the conversion once, for a whole team
+
+The export needs torch and a git-only package, but its output is a **portable ONNX
+graph**: the execution provider is chosen when the graph is loaded, not baked in at
+export. So one person converts, and everyone else is handed the `.onnx` regardless of
+whether they are on a different GPU vendor or a different operating system.
+
+```bash
+focusedgaze setup --onnx l2cs_gaze360.onnx      # validates it, then installs it
+```
+
+It is loaded and run before it is copied, so a wrong or truncated file fails while it
+is still yours rather than after it is sitting in the cache under the name the runtime
+trusts. For a shared drive, skip the copy entirely:
+
+```bash
+export FOCUSEDGAZE_MODEL_DIR=/mnt/share/models/focusedgaze
+```
+
+That variable is **exclusive**: when it is set, nothing else is consulted and no
+network access happens for any asset.
+
+Passing the graph on is redistribution, which the Gaze360 terms restrict to
+non-commercial research. Within a research group that is the permitted case; a public
+mirror is not, and moving it out of the wheel and onto a share does not change that.
+See NOTICE.
 
 Then ten lines of Python, as in section 4.
 
@@ -575,8 +670,9 @@ Then ten lines of Python, as in section 4.
 | `GazeEstimator`, landmarks, ONNX model | **[SHIPPED]**, bit-identical to the original on 60 frames |
 | Capture layer (`WebcamSource`, video and sequence sources) | **[SHIPPED]** |
 | `WebcamGazeTracker` | **[SHIPPED]** |
-| CLI: `download-models`, `check`, `calibrate`, `export-onnx` | **[SHIPPED]** |
-| CLI: `serve`, `demo` | **[SHIPPED]** |
+| CLI: `download-models`, `setup`, `check`, `calibrate`, `export-onnx` | **[SHIPPED]** |
+| CLI: `serve`, `demo`, `accuracy` | **[SHIPPED]** |
+| Full-screen canvas (`calibration.screen`) | **[SHIPPED]**, drives `calibrate` and `accuracy` |
 | WebSocket server | **[SHIPPED]**, verified against the real browser client |
 
 For what runs today with executed examples, see [usage.md](usage.md). That

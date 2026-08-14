@@ -62,6 +62,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 import platformdirs
 
@@ -72,6 +73,8 @@ __all__ = [
     "FACE_LANDMARKER",
     "GAZE_MODEL",
     "GAZE_WEIGHTS",
+    "INTEL_GAZE",
+    "INTEL_GAZE_WEIGHTS",
     "MODEL_DIR_ENV",
     "REGISTRY",
     "ModelAsset",
@@ -142,6 +145,11 @@ class ModelAsset:
             wants to know whether they have the same bytes can find out.
         required_at_runtime: Whether the pipeline needs this file to run.
             ``False`` marks a build-time input such as the PyTorch checkpoint.
+        backend: The gaze backend this asset belongs to, or ``None`` for one
+            every backend needs. Only one backend runs at a time, so without
+            this ``check`` would report the L2CS weights missing to somebody
+            using the Intel model and vice versa -- a failure for a file they
+            have no reason to own.
 
     Invariants are checked at construction, not at download time. An asset that
     could be fetched without a digest to check it against is a bug in this file,
@@ -160,6 +168,7 @@ class ModelAsset:
     size_bytes: int | None = None
     reference_sha256: str | None = None
     required_at_runtime: bool = True
+    backend: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.filename:
@@ -252,6 +261,64 @@ FACE_LANDMARKER = ModelAsset(
     ),
 )
 
+_INTEL_BASE = (
+    "https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/"
+    "models_bin/1/gaze-estimation-adas-0002/FP32/"
+)
+
+#: The default gaze backend, and the reason there can be one at all.
+#:
+#: Apache-2.0, Copyright Intel Corporation, per the model's own ``model.yml`` in
+#: the Open Model Zoo. That licence permits redistribution, so unlike
+#: :data:`GAZE_MODEL` this may be fetched automatically and could be bundled
+#: outright. 7.5 MB against 91 MB, and 0.139 GFLOPs against roughly 4.
+INTEL_GAZE = ModelAsset(
+    name="intel_gaze",
+    filename="gaze-estimation-adas-0002.xml",
+    licence="Apache-2.0 (Intel Corporation)",
+    licence_url="https://github.com/openvinotoolkit/open_model_zoo/blob/master/LICENSE",
+    auto_download=True,
+    url=_INTEL_BASE + "gaze-estimation-adas-0002.xml",
+    source=(
+        "https://github.com/openvinotoolkit/open_model_zoo/blob/master/models/"
+        "intel/gaze-estimation-adas-0002/model.yml (license: field points at the "
+        "repository's Apache-2.0 LICENSE)"
+    ),
+    sha256="4f413ad706a622a8f1411e3eec6f40e4d51f062a6eb76c22498970235195ffa0",
+    size_bytes=68724,
+    backend="intel",
+    instructions=(
+        "The Intel gaze model is Apache-2.0 and is fetched automatically from\n"
+        "Intel's own storage. If the download failed you are offline, behind a\n"
+        "proxy, or the URL has moved. Both files are needed: the .xml topology\n"
+        "and the .bin weights."
+    ),
+)
+
+#: The weights half of the pair above. OpenVINO IR is two files and reading the
+#: ``.xml`` silently loads the ``.bin`` beside it, so a missing ``.bin`` surfaces
+#: as a confusing load error rather than a missing file.
+INTEL_GAZE_WEIGHTS = ModelAsset(
+    name="intel_gaze_weights",
+    filename="gaze-estimation-adas-0002.bin",
+    licence="Apache-2.0 (Intel Corporation)",
+    licence_url="https://github.com/openvinotoolkit/open_model_zoo/blob/master/LICENSE",
+    auto_download=True,
+    url=_INTEL_BASE + "gaze-estimation-adas-0002.bin",
+    source=(
+        "https://github.com/openvinotoolkit/open_model_zoo/blob/master/models/"
+        "intel/gaze-estimation-adas-0002/model.yml"
+    ),
+    sha256="4947253671d1984f0c0b03392854b3af022bfca3b3dd055768db4531f031e1d4",
+    size_bytes=7529380,
+    backend="intel",
+    instructions=(
+        "The weights half of gaze-estimation-adas-0002. Apache-2.0, fetched\n"
+        "automatically. OpenVINO loads it implicitly from beside the .xml, so it\n"
+        "must sit in the same directory."
+    ),
+)
+
 GAZE_MODEL = ModelAsset(
     name="gaze_model",
     filename="l2cs_gaze360.onnx",
@@ -262,6 +329,7 @@ GAZE_MODEL = ModelAsset(
     # No enforced digest either: this file is exported on the user's own machine,
     # so its bytes depend on their torch and onnx versions.
     reference_sha256="dfc208a38f15fa372ffb42aff160fcf20ebee6aa117fe1ce0b703c387b838465",
+    backend="l2cs",
     instructions=(
         "focusedgaze does NOT download the gaze model, and will not.\n"
         "\n"
@@ -309,8 +377,21 @@ GAZE_WEIGHTS = ModelAsset(
 )
 
 #: Every asset, keyed by logical name. Insertion order is the display order.
+#:
+#: The two gaze backends are both listed and both marked required, which is
+#: deliberate: `check` and `download-models` should report on whichever the user
+#: has selected, and a machine that has neither is broken in a way worth saying
+#: out loud. Which one the pipeline loads is a configuration question, not a
+#: registry one -- see :class:`~focusedgaze.config.ModelConfig`.
 REGISTRY: Mapping[str, ModelAsset] = {
-    a.name: a for a in (FACE_LANDMARKER, GAZE_MODEL, GAZE_WEIGHTS)
+    a.name: a
+    for a in (
+        FACE_LANDMARKER,
+        INTEL_GAZE,
+        INTEL_GAZE_WEIGHTS,
+        GAZE_MODEL,
+        GAZE_WEIGHTS,
+    )
 }
 
 
@@ -328,9 +409,26 @@ def get_asset(name: str) -> ModelAsset:
         raise ConfigError(f"unknown model asset {name!r}; known assets: {known}") from None
 
 
-def runtime_assets() -> tuple[ModelAsset, ...]:
-    """The assets the pipeline actually needs in order to run."""
-    return tuple(a for a in REGISTRY.values() if a.required_at_runtime)
+#: Repeated from :attr:`focusedgaze.config.ModelConfig.backend` rather than
+#: imported, so the asset registry stays free of the config module. The two must
+#: agree; ``test_assets_registry`` pins that they do.
+DEFAULT_BACKEND: Final = "l2cs"
+
+
+def runtime_assets(backend: str = DEFAULT_BACKEND) -> tuple[ModelAsset, ...]:
+    """The assets the pipeline actually needs in order to run.
+
+    Args:
+        backend: Which gaze backend is in use. Assets tagged for a different one
+            are excluded: only one backend runs at a time, and reporting the
+            other's weights as missing would be a failure for a file the user
+            has no reason to have.
+    """
+    return tuple(
+        a
+        for a in REGISTRY.values()
+        if a.required_at_runtime and a.backend in (None, backend)
+    )
 
 
 # ---------------------------------------------------------------------------

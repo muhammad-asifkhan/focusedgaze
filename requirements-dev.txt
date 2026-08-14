@@ -43,7 +43,14 @@ platformdirs==4.11.0
 protobuf==7.35.1
 
 # ── ONNX provider (cpu extra; swap for onnxruntime-directml on Windows GPU) ──
+# Only the l2cs backend needs this. The intel backend uses OpenVINO below.
 onnxruntime==1.28.0
+
+# ── intel extra: the Apache-2.0 gaze backend ────────────────────────────────
+# CPU-only and deliberately so: gaze-estimation-adas-0002 is 0.139 GFLOPs and
+# was measured at 2.0 ms on a plain CPU, against 141.7 ms for L2CS through
+# DirectML on the same machine. There is nothing left for a GPU to win.
+openvino==2026.3.0
 
 # ── calibration extra ───────────────────────────────────────────────────────
 scikit-learn==1.9.0

@@ -316,3 +316,68 @@ def test_a_point_with_samples_but_no_prediction_counts_as_failed() -> None:
     )
     assert report.complete is False
     assert report.points[0].error_cm is None
+
+
+# ---------------------------------------------------------------------------
+# The unclamped prediction.
+#
+# Clamping is right for the error figure -- an application cannot draw a cursor
+# off the screen -- but recording only the clamped value destroys the evidence
+# for the largest error term this system has. Five measured runs showed a
+# per-session vertical offset spanning 0.41 of screen height, and the worst of
+# them stored two points as `y = 0.0` when the model had pointed above the
+# screen entirely, making the offset unrecoverable from the report written to
+# characterise it.
+# ---------------------------------------------------------------------------
+
+
+def test_a_prediction_off_the_screen_is_recorded_where_it_actually_landed() -> None:
+    report = build_report(
+        [PointMeasurement((0.5, 0.05), (0.5, 0.0), 12, raw=(0.5, -0.30))],
+        profile_digest="a" * 64,
+    )
+    point = report.points[0]
+    assert point.predicted == (0.5, 0.0), "the error must use the clamped value"
+    assert point.raw == (0.5, -0.30), "the unclamped value must survive"
+    assert point.clamped is True
+
+
+def test_a_prediction_on_the_screen_is_not_marked_clamped() -> None:
+    report = build_report(
+        [PointMeasurement((0.5, 0.5), (0.52, 0.48), 12, raw=(0.52, 0.48))],
+        profile_digest="a" * 64,
+    )
+    assert report.points[0].clamped is False
+
+
+def test_a_measurement_without_a_raw_value_still_builds() -> None:
+    """Reports predate this field. They must render, not be rejected."""
+    report = build_report(
+        [PointMeasurement((0.5, 0.5), (0.52, 0.48), 12)], profile_digest="a" * 64
+    )
+    assert report.points[0].raw == (0.52, 0.48)
+    assert report.points[0].clamped is False, "absent raw is not evidence of clamping"
+
+
+def test_the_error_of_a_clamped_point_is_flagged_as_a_lower_bound() -> None:
+    """Clamping moves a prediction onto the screen and so toward the target,
+    which makes the number smaller than the truth. Reporting it silently would
+    understate exactly the failure it is evidence of."""
+    report = build_report(
+        [PointMeasurement((0.5, 0.05), (0.5, 0.0), 12, raw=(0.5, -0.30)),
+         PointMeasurement((0.5, 0.5), (0.5, 0.5), 12, raw=(0.5, 0.5))],
+        profile_digest="a" * 64,
+    )
+    text = "\n".join(render(report))
+    assert "off screen" in text
+    assert "LOWER BOUND" in text
+
+
+def test_the_raw_value_survives_a_round_trip_through_json() -> None:
+    report = build_report(
+        [PointMeasurement((0.5, 0.05), (0.5, 0.0), 12, raw=(0.5, -0.30))],
+        profile_digest="a" * 64,
+    )
+    point = json.loads(json.dumps(report.to_dict()))["points"][0]
+    assert point["raw"] == [0.5, -0.30]
+    assert point["clamped"] is True

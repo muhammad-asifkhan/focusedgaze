@@ -20,6 +20,7 @@ Two rules the legacy pipeline broke, and which this tree exists to enforce:
 from __future__ import annotations
 
 __all__ = [
+    "CalibrationAborted",
     "CalibrationError",
     "CameraError",
     "ConfigError",
@@ -69,6 +70,19 @@ class CalibrationError(GazeError):
 
     Covers too few samples, a degenerate fit, and a profile that loads but does
     not describe a usable polynomial.
+    """
+
+
+class CalibrationAborted(CalibrationError):
+    """The user stopped a calibration or measurement run before it finished.
+
+    Separate from :class:`CalibrationError` because it is not a fault: pressing
+    Escape during the sweep is a supported way out, and the caller's remedy is to
+    exit quietly rather than to report a failure. It carries no partial samples
+    on purpose. A sweep abandoned halfway has covered only part of the screen,
+    and fitting that would produce a profile that extrapolates everywhere the dot
+    never reached -- which `ui.summarise_coverage` exists to warn about and which
+    would be silently baked in here instead.
     """
 
 

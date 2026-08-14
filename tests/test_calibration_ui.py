@@ -21,7 +21,9 @@ from focusedgaze.calibration.ui import (
     DEFAULT_SWEEP_DEGREE,
     REFERENCE_SAMPLE_COUNT,
     THIN_REGION_SAMPLES,
+    collect_dwell_samples,
     collect_pursuit_samples,
+    grid_points,
     iter_dwell_targets,
     measure_drift,
     median_angle,
@@ -341,3 +343,111 @@ def test_sweep_duration_scales_with_the_frame_rate() -> None:
     assert sweep_duration_for(pursuit_path(), REFERENCE_SAMPLE_COUNT, 30.0) == 58
     with pytest.raises(CalibrationError, match="fps"):
         sweep_duration_for(pursuit_path(), 100, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Even coverage across the three screen bands.
+#
+# Coverage is reported over region_of's 3x3 grid, so evenly spaced rows must
+# divide evenly into three or the skew is baked into every run. This was found
+# on a real calibration that collected 362 top, 187 middle, 368 bottom -- the
+# middle band getting half the samples, which no sweep duration can fix.
+# ---------------------------------------------------------------------------
+
+
+def _band_counts(points) -> list[int]:
+    """Samples per band (top, middle, bottom)."""
+    return [sum(1 for x, y in points if region_of(x, y)[1] == r) for r in range(3)]
+
+
+@pytest.mark.parametrize("rows", [3, 6, 9])
+def test_a_sweep_with_rows_a_multiple_of_three_covers_the_bands_evenly(rows) -> None:
+    counts = _band_counts(pursuit_path(rows=rows).points)
+    assert len(set(counts)) == 1, f"rows={rows} skewed the bands: {counts}"
+
+
+@pytest.mark.parametrize("rows", [4, 5])
+def test_the_skew_this_guards_against_is_real(rows) -> None:
+    """The control. Without it the test above could pass for the wrong reason."""
+    assert len(set(_band_counts(pursuit_path(rows=rows).points))) > 1
+
+
+def test_the_default_sweep_is_balanced() -> None:
+    """The default is what almost everyone runs, so it is the one that matters."""
+    assert len(set(_band_counts(pursuit_path().points))) == 1
+
+
+# ---------------------------------------------------------------------------
+# The dwell grid.
+# ---------------------------------------------------------------------------
+
+
+def test_the_default_grid_covers_every_band_evenly_on_both_axes() -> None:
+    points = grid_points()
+    rows = [sum(1 for x, y in points if region_of(x, y)[1] == r) for r in range(3)]
+    cols = [sum(1 for x, y in points if region_of(x, y)[0] == c) for c in range(3)]
+    assert len(set(rows)) == 1 and len(set(cols)) == 1, f"{rows} {cols}"
+
+
+def test_the_grid_reaches_the_margin_on_every_edge() -> None:
+    """The fit must be asked about the corners rather than extrapolating there."""
+    points = grid_points(margin=0.05)
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    assert min(xs) == pytest.approx(0.05) and max(xs) == pytest.approx(0.95)
+    assert min(ys) == pytest.approx(0.05) and max(ys) == pytest.approx(0.95)
+
+
+def test_the_grid_alternates_direction_so_consecutive_points_are_adjacent() -> None:
+    """A long jump between points makes the settling time a lie."""
+    points = grid_points(rows=4, cols=4, margin=0.0)
+    first_row = [x for x, y in points if y == pytest.approx(0.0)]
+    second_row = [x for x, y in points if y == pytest.approx(1 / 3)]
+    assert first_row == sorted(first_row)
+    assert second_row == sorted(second_row, reverse=True)
+
+
+@pytest.mark.parametrize(("rows", "cols"), [(1, 4), (4, 1), (0, 0)])
+def test_a_degenerate_grid_is_rejected(rows, cols) -> None:
+    with pytest.raises(CalibrationError):
+        grid_points(rows=rows, cols=cols)
+
+
+def test_a_grid_margin_outside_the_screen_is_rejected() -> None:
+    with pytest.raises(CalibrationError, match="margin"):
+        grid_points(margin=0.5)
+
+
+def test_dwell_collection_keeps_only_the_recording_phase() -> None:
+    """Samples taken while the eye is still travelling carry the new target's
+    label and the old target's angle. That is a confident mislabel, and the
+    fitter cannot detect it."""
+    ticks = iter([i * 0.5 for i in range(200)])
+    tracker = _Tracker([_ok(0.1, 0.2)] * 200)
+    samples = collect_dwell_samples(
+        tracker, [(0.1, 0.1), (0.9, 0.9)],
+        dwell_seconds=1.0, sample_seconds=1.0, clock=lambda: next(ticks),
+    )
+    assert samples, "nothing was recorded at all"
+    # Every kept sample must carry one of the two targets, never an interpolation.
+    assert {(x, y) for _, _, x, y in samples} <= {(0.1, 0.1), (0.9, 0.9)}
+
+
+def test_dwell_collection_reports_the_phase_to_the_display() -> None:
+    """The canvas needs `collecting` to show the user when they are measured."""
+    ticks = iter([i * 0.5 for i in range(200)])
+    seen: list[bool] = []
+    collect_dwell_samples(
+        _Tracker([_ok(0.1, 0.2)] * 200), [(0.5, 0.5)],
+        dwell_seconds=1.0, sample_seconds=1.0,
+        on_frame=lambda target, collecting, result: seen.append(collecting),
+        clock=lambda: next(ticks),
+    )
+    assert True in seen and False in seen, f"only ever reported {set(seen)}"
+
+
+def test_dwell_collection_stops_when_the_camera_does() -> None:
+    samples = collect_dwell_samples(
+        _Tracker([]), [(0.5, 0.5)], dwell_seconds=0.0, sample_seconds=1.0,
+    )
+    assert samples == []

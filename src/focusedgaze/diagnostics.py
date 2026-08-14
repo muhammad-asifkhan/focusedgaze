@@ -40,7 +40,7 @@ import numpy as np
 
 from . import __version__
 from .assets import GAZE_MODEL, asset_path, model_dir, model_dir_override, runtime_assets
-from .assets.registry import sha256_file
+from .assets.registry import DEFAULT_BACKEND, sha256_file
 from .calibration.profile import active_profile_name, list_profiles, profiles_dir
 from .capture import Frame, FrameSource
 from .config import CameraConfig
@@ -202,8 +202,18 @@ def check_onnx_provider(providers: ProviderLister = _list_providers) -> CheckRes
     )
 
 
-def check_models(env: Mapping[str, str] | None = None) -> list[CheckResult]:
+def check_models(
+    env: Mapping[str, str] | None = None, backend: str = DEFAULT_BACKEND
+) -> list[CheckResult]:
     """Are the model files present, and are they the right files?
+
+    Args:
+        env: Environment to resolve the model directory from.
+        backend: Which gaze backend to report on. Only one runs at a time, so
+            reporting the other's weights as missing would be a failure for a
+            file the user has no reason to own -- and reporting them as present
+            is just as misleading, because it says nothing about the backend
+            they actually selected.
 
     The digest check is what catches the 468-point landmark model. That one is
     listed in `docs/troubleshooting.md` as "distance is always wrong by a similar
@@ -224,7 +234,7 @@ def check_models(env: Mapping[str, str] | None = None) -> list[CheckResult]:
         )
     )
 
-    for asset in runtime_assets():
+    for asset in runtime_assets(backend):
         path = asset_path(asset, env)
         if not path.exists():
             manual = not asset.auto_download
@@ -482,19 +492,21 @@ def run_checks(
     source_factory: SourceFactory = _open_webcam,
     profile_directory: str | None = None,
     settle: bool = True,
+    backend: str = DEFAULT_BACKEND,
 ) -> tuple[CheckResult, ...]:
     """Every check, in the order a reader should meet them.
 
     Args:
         camera: Probe the webcam. ``False`` for a headless or CI run, where
             "no camera" is expected rather than diagnostic.
+        backend: Which gaze backend to report models for.
 
     Ordered deliberately: interpreter, then the things that stop it working, then
     the things that make it worse than expected. A user reads until something is
     not ``ok``.
     """
     results: list[CheckResult] = [check_interpreter(), check_onnx_provider(providers)]
-    results.extend(check_models(env))
+    results.extend(check_models(env, backend))
     results.append(check_calibration(profile_directory))
     if camera:
         results.extend(check_camera(source_factory, settle=settle))

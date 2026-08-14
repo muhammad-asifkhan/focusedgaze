@@ -61,6 +61,13 @@ directml    = ["onnxruntime-directml>=1.17,<2"]
 cuda        = ["onnxruntime-gpu>=1.17,<2"]
 cpu         = ["onnxruntime>=1.17,<2"]
 
+# The Intel backend runs on OpenVINO rather than ONNX Runtime, so it needs no
+# provider extra at all: the CPU plugin is built in and is the only one worth
+# using here (0.139 GFLOPs measured at 2 ms). Ceiling at <2027 because OpenVINO
+# versions are date-based and only the 2026.x line has been run against this
+# code; widening means replaying the fixtures, not relaxing the bound.
+intel       = ["openvino>=2024.0,<2027"]
+
 # Fitting a calibration needs scikit-learn; APPLYING one does not (D3). scipy is
 # already optional upstream and only adds head-rotation features.
 calibration = ["scikit-learn>=1.3,<2", "scipy>=1.11,<2"]

@@ -48,7 +48,7 @@ logger and configuring it is the application's job.
 from __future__ import annotations
 
 # Single source of truth for the version; pyproject reads it via hatch (D6).
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 from .calibration import (
     CalibrationCollector,
@@ -77,8 +77,10 @@ from .config import (
     PositioningConfig,
     RuntimeConfig,
 )
+from .control import DwellSelector, DwellState, EdgeZone, Target, edge_zones_for
 from .core import GazeEstimator
 from .exceptions import (
+    CalibrationAborted,
     CalibrationError,
     CameraError,
     ConfigError,
@@ -96,6 +98,7 @@ from .types import FaceObservation, GazeResult, GazeStatus
 # the top level, because they are tools for the CLI and for calibration time
 # rather than part of the everyday API.
 __all__ = [
+    "CalibrationAborted",
     "CalibrationCollector",
     "CalibrationError",
     "CalibrationProfile",
@@ -103,6 +106,9 @@ __all__ = [
     "CameraConfig",
     "CameraError",
     "ConfigError",
+    "DwellSelector",
+    "DwellState",
+    "EdgeZone",
     "FaceObservation",
     "FilterConfig",
     "FitResult",
@@ -122,10 +128,12 @@ __all__ = [
     "ProfileVersionError",
     "ProviderError",
     "RuntimeConfig",
+    "Target",
     "VideoFileSource",
     "WebcamGazeTracker",
     "WebcamSource",
     "__version__",
+    "edge_zones_for",
     "fit_calibration",
     "list_profiles",
     "migrate_pickle",

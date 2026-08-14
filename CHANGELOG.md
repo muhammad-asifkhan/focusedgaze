@@ -6,6 +6,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Engineering decisions and the reasoning behind them live in `MIGRATION_AUDIT.md`;
 this file records what changed, per phase.
 
+## [0.1.0]
+
+The first release that does anything. `0.0.0` on PyPI is a placeholder — a 21 KB
+wheel in which almost every module is a stub — and it cannot be replaced, because
+PyPI never permits re-uploading a version.
+
+### Added
+- **Interactive calibration.** `calibration/screen.py` draws the dot that nothing
+  was drawing. `focusedgaze calibrate` previously refused to run, blaming a phase
+  that had already shipped, so no profile could be produced and the library could
+  not emit screen coordinates at all. Two collection modes: a smooth-pursuit
+  sweep, and a dwell grid (`--grid`) for slow machines, where a dot redrawn once
+  per pipeline iteration steps rather than glides.
+- **`focusedgaze.control`.** Dwell selection with hysteresis, blink grace,
+  re-arming and fixation averaging — the layer between gaze coordinates and an
+  application. Pure and clock-injected, so it is tested without hardware.
+- **A second, redistributable gaze backend.** Intel's `gaze-estimation-adas-0002`
+  (Apache-2.0), selected with `--backend intel`. 7.5 MB against 91 MB, and
+  measured at **2.0 ms against 141.7 ms** for L2CS on the same machine. It is
+  fetched automatically and digest-verified; the L2CS weights cannot be, because
+  the Gaze360 licence names models trained on the dataset as covered derivative
+  works and forbids distribution. L2CS remains the default so no existing
+  profile, fixture or measurement changes meaning.
+- **`GazeEstimator.recentre()`** — a session offset measured from one centre dot.
+  Across five runs the whole mapping shifted between sessions by −0.25 to +0.34 of
+  screen height, twice on an identical profile minutes apart.
+- **Distance awareness.** Profiles record the distance they were collected at,
+  the pre-flight shows it live, and `compensate_distance` (off by default)
+  rescales for the difference.
+- **`focusedgaze setup`**, including `--onnx` to install a graph somebody else
+  converted, validated by loading and running it before it is copied.
+- [`docs/getting-started.md`](docs/getting-started.md).
+
+### Fixed
+- **The positioning gate accepted every state it existed to reject.**
+  `OUT_OF_RANGE` and `OFF_CENTER` readings carry gaze angles, so a check for "has
+  an angle" passed them. An accuracy run was collected at 69.4 cm against a 65 cm
+  limit. The gate was also blind while calibrating, where it matters most.
+- **Out-of-zone samples were being trained on**, contradicting the docstring that
+  claimed they were dropped for free.
+- **A crash on tracking loss.** `FaceLandmarker.reset()` rewound the frame
+  counter, so regaining a lost face replayed a timestamp MediaPipe had already
+  seen and raised `ValueError: Input timestamp must be monotonically increasing`,
+  uncaught. It killed two of three calibration attempts.
+- **Eye crops ignored head roll** on the Intel backend. Measured across 12.6° of
+  tilt: horizontal gain 0.98 → 0.48, error 1.43 cm → 7.90 cm.
+- **`export-onnx` wrote outside the directory the runtime reads**, so following
+  the documented instructions left `check` still reporting the model missing.
+- **`apply()` clamped**, making the unclamped diagnostic inert. Now `apply_raw()`.
+- **The sweep's rows landed 2-1-2** across the three screen bands, starving the
+  middle third on every run by every user. Now 2-2-2.
+
+### Known issues
+- The roll correction's **sign is unverified**. It follows the Open Model Zoo
+  reference, but this package derives roll from MediaPipe's transformation matrix
+  rather than Open Model Zoo's head-pose network. If the two disagree, head tilt
+  gets worse rather than better. To be settled in 0.1.1.
+- Intel-backend accuracy is measured on one machine and one face.
+
 ## [Unreleased]
 
 ### Added

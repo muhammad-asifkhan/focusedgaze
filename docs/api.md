@@ -1,16 +1,17 @@
 # API reference
 
-Reference for every public name. Most of the package is not implemented yet, and this page
-distinguishes the two states rather than blurring them.
+Reference for every public name.
 
-**Implemented and stable against the original implementation:** `core.filters`,
-`core.positioning`.
+**Everything documented here is implemented.** This page once split the package into
+"implemented" and "not implemented yet" and listed only `core.filters` and
+`core.positioning` under the first heading; that stopped being true and the split has been
+removed rather than left to rot. `focusedgaze.__all__` now exports the full public surface,
+not just `__version__`.
 
-**Not implemented:** everything else. Names below marked *(Phase N)* do not exist. Importing
-them fails.
-
-`focusedgaze.__all__` currently exports `__version__` and nothing else, deliberately: an
-`__all__` entry that cannot be imported is worse than an honest omission.
+This reference lags the code in coverage, not in accuracy: names it does not mention may
+still exist. `focusedgaze.__all__` and the module docstrings are authoritative. Recent
+additions not yet written up here include `focusedgaze.calibration.screen` (`DotRenderer`,
+`screen_size_px`, `target_to_pixels`) and the `CalibrationAborted` exception.
 
 ---
 

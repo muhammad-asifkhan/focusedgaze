@@ -3,10 +3,11 @@
 Two layers. The lower one is pure computation and is the point of the design. The
 upper one owns a webcam and is a convenience built on top.
 
-> **Status.** Everything under [What works today](#what-works-today) is
-> implemented and its examples were executed against the shipped package. Anything
-> under [The intended API](#the-intended-api) is a published contract, not code,
-> and none of it runs.
+> **Status.** Everything on this page is implemented and its examples were executed
+> against the shipped package, including the section once titled "the intended API":
+> `GazeEstimator`, `WebcamGazeTracker` and the capture layer all landed with Phase 2.
+> The last gap, a full-screen canvas for `focusedgaze calibrate`, is now
+> `focusedgaze.calibration.screen`.
 
 > **Calibration is verified.** The pure-NumPy `apply()` reproduces the recorded
 > legacy output exactly across all 169 fixture cases, its polynomial term
@@ -205,7 +206,11 @@ print(list_profiles())        # named profiles already on this machine
 ```
 
 Collection is headless and scriptable, so it does not require the on-screen
-routine.
+routine. For the on-screen routine itself, run `focusedgaze calibrate`: a
+positioning check, a smooth-pursuit sweep, a coverage report, and a robust fit.
+To build your own, `focusedgaze.calibration.ui.collect_pursuit_samples` takes an
+``on_frame`` hook and `focusedgaze.calibration.screen.DotRenderer` is what the CLI
+passes to it.
 
 Fitting needs scikit-learn; applying does not. That split is the whole point of
 the format. A saved profile stores plain polynomial coefficients plus metadata,
@@ -217,10 +222,11 @@ execution risk the way unpickling is.
 
 ---
 
-## The intended API
+## The two layers
 
-> **None of this runs yet.** It is the contract Phases 2 and 4 are being built
-> against, published so it can be reviewed and argued with before it exists.
+> **This all runs.** It was published as a contract before it existed, and Phases 2
+> and 4 built to it. The wording below is the original contract, kept because the
+> shipped code matches it.
 
 ### The pure layer
 

@@ -85,16 +85,37 @@ class PointMeasurement:
 
     Args:
         target: Where the user was told to look, normalised ``(x, y)``.
-        predicted: Where the model said they looked, normalised, or ``None``
-            when no usable reading was obtained.
+        predicted: Where the model said they looked, normalised and **clamped to
+            the screen**, or ``None`` when no usable reading was obtained.
         n_samples: How many gaze readings contributed to ``predicted``. Zero
             when the point failed, and recorded even then: "collected nothing"
             and "collected three" are different problems.
+        raw: The same prediction **before clamping**, so a point that landed off
+            the screen can still be measured. Defaults to ``predicted``.
+
+    WHY ``raw`` EXISTS
+    ------------------
+    Clamping is right for the error figure -- an application cannot put a cursor
+    outside the screen, so that is the error a user experiences -- but recording
+    only the clamped value destroys the evidence for the largest error term this
+    system has. Five runs here showed a per-session vertical offset spanning 0.41
+    of screen height, and in the worst of them two points were stored as
+    ``y = 0.0`` when the model had actually predicted somewhere above the screen.
+    The magnitude of the offset was therefore unrecoverable from the report that
+    existed to characterise it.
     """
 
     target: tuple[float, float]
     predicted: tuple[float, float] | None
     n_samples: int
+    raw: tuple[float, float] | None = None
+    #: Median head orientation while this point was measured, in radians, or
+    #: ``None`` when it was not recorded. Diagnostic: nothing in the mapping
+    #: consumes it. See :mod:`focusedgaze.core.headpose` for why it is being
+    #: recorded before it is being used.
+    head_pose: tuple[float, float, float] | None = None
+    #: Median eye-to-camera distance while this point was measured, in cm.
+    distance_cm: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,11 +127,25 @@ class PointResult:
     n_samples: int
     error_cm: float | None
     error_pct_width: float | None
+    raw: tuple[float, float] | None = None
+    head_pose: tuple[float, float, float] | None = None
+    distance_cm: float | None = None
 
     @property
     def measured(self) -> bool:
         """Whether this point produced a usable reading."""
         return self.predicted is not None
+
+    @property
+    def clamped(self) -> bool:
+        """Whether the prediction fell outside the screen and was pulled onto it.
+
+        A clamped point's ``error_cm`` is a **lower bound**: clamping moves the
+        prediction toward the screen, and therefore usually toward the target.
+        """
+        if self.predicted is None or self.raw is None:
+            return False
+        return self.raw != self.predicted
 
     @property
     def label(self) -> str:
@@ -272,7 +307,18 @@ class AccuracyReport:
                 {
                     "target": list(p.target),
                     "predicted": None if p.predicted is None else list(p.predicted),
+                    # The unclamped prediction. Without it a point that landed
+                    # off-screen is indistinguishable from one that landed on the
+                    # edge, and the offset that put it there is unmeasurable.
+                    "raw": None if p.raw is None else list(p.raw),
+                    "clamped": p.clamped,
                     "n_samples": p.n_samples,
+                    # Diagnostics, unused by the mapping: recorded so the
+                    # per-session offset can be correlated against head
+                    # orientation and distance before either is built into the
+                    # polynomial. See focusedgaze.core.headpose.
+                    "head_pose": None if p.head_pose is None else list(p.head_pose),
+                    "distance_cm": p.distance_cm,
                     "error_cm": p.error_cm,
                     "error_pct_width": p.error_pct_width,
                 }
@@ -326,6 +372,13 @@ def build_report(
                 n_samples=m.n_samples,
                 error_cm=error,
                 error_pct_width=error / width * 100.0,
+                # Falls back to the clamped value so a caller that does not
+                # supply one still produces a well-formed report; `clamped` then
+                # reads False, which is the truthful answer for a measurement
+                # that recorded no separate raw value.
+                raw=m.raw if m.raw is not None else m.predicted,
+                head_pose=m.head_pose,
+                distance_cm=m.distance_cm,
             )
         )
 
@@ -376,9 +429,25 @@ def render(report: AccuracyReport) -> list[str]:
         if not point.measured:
             lines.append(f"  {point.label:>10}   NO SAMPLES")
             continue
+        # A clamped point is marked because its error is a lower bound, not a
+        # measurement: the prediction landed off the screen and was pulled back
+        # onto it, which moves it toward the target.
+        mark = "  >off screen" if point.clamped else ""
         lines.append(
             f"  {point.label:>10}   {point.error_cm:5.1f} cm"
-            f"   {point.error_pct_width:5.1f}%   n={point.n_samples}"
+            f"   {point.error_pct_width:5.1f}%   n={point.n_samples}{mark}"
+        )
+
+    clamped = [p for p in report.points if p.clamped]
+    if clamped:
+        lines.append("")
+        lines.append(
+            f"  {len(clamped)} point(s) predicted off the screen. Their errors above "
+            "are LOWER BOUNDS:"
+        )
+        lines.append(
+            "  clamping moves a prediction onto the screen, and therefore toward "
+            "the target. See the `raw` field for where the model actually pointed."
         )
 
     lines.append("")

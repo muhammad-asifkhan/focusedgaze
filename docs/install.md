@@ -38,10 +38,10 @@ pip install focusedgaze
 python -c "import focusedgaze; print(focusedgaze.__version__)"
 ```
 
-Loading a gaze model without a provider is intended to raise a named focusedgaze exception
-telling you which extra to install, rather than a bare `ImportError` from somewhere in the
-dependency tree. That is the agreed design. It is not implemented yet, because the model
-loader is still a stub, so today there is nothing to raise it.
+Loading a gaze model without a provider raises a named focusedgaze exception telling you
+which extra to install, rather than a bare `ImportError` from somewhere in the dependency
+tree. That is `ProviderError`, and it works: the model loader is real, so there is now
+something to raise it.
 
 ## The other extras
 

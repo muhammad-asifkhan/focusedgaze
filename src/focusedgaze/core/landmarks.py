@@ -224,13 +224,35 @@ class FaceLandmarker:
         )
 
     def reset(self) -> None:
-        """Forget crop smoothing and the frame counter.
+        """Forget crop smoothing. **Does not touch the frame counter.**
 
         Called when tracking is lost, so the crop does not glide in from where
-        the face used to be, and so timestamps restart cleanly.
+        the face used to be.
+
+        THE COUNTER MUST NOT RESTART, AND USED TO
+        -----------------------------------------
+        This method previously set ``_frame_index = 0`` "so timestamps restart
+        cleanly". They must not. The counter's only job is to feed
+        ``detect_for_video`` a **strictly increasing** millisecond stamp, and the
+        underlying MediaPipe landmarker keeps its own timestamp state across the
+        call -- it does not know a reset happened. Rewinding the counter
+        therefore replays stamps it has already seen, and it raises
+
+            ValueError: Input timestamp must be monotonically increasing.
+
+        which killed the whole process rather than dropping a frame.
+
+        The trigger is ordinary: lose the face and find it again. Tracking loss
+        calls this, the next frame is stamped 0, and MediaPipe rejects it. It
+        showed up as two crashes out of three calibration attempts, always during
+        the positioning step -- which is exactly where a user is moving into
+        frame and the face comes and goes.
+
+        Recreating the landmarker here would also fix it, at the cost of
+        reloading the model on every blink-length dropout. The counter is
+        monotonic per landmarker instance and that is all it has to be.
         """
         self._box.reset()
-        self._frame_index = 0
 
     def detect(self, frame: NDArray[np.uint8], timestamp: float | None = None) -> FaceObservation | None:
         """Find the face in one BGR frame and return it with its crop box.
