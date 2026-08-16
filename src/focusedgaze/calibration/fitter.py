@@ -306,6 +306,7 @@ def fit_calibration(
     screen_size: tuple[int, int] | None = None,
     camera_size: tuple[int, int] | None = DEFAULT_CAMERA_SIZE,
     distance_cm: float | None = None,
+    backend: str | None = None,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
     validation_seed: int = DEFAULT_VALIDATION_SEED,
 ) -> CalibrationProfile:
@@ -328,6 +329,10 @@ def fit_calibration(
             distance it was taught at, and this is what lets the runtime correct
             for sitting somewhere else. See
             :meth:`~focusedgaze.calibration.profile.CalibrationProfile.distance_scale`.
+        backend: Which gaze backend produced the samples. Recorded so the
+            profile can refuse to be used with the other one, whose angle
+            convention it was not fitted against. ``None`` leaves it unrecorded,
+            which downstream treats as unknown rather than as either backend.
         validation_fraction: Portion held out to measure ``validation_error``.
             Zero disables the measurement.
         validation_seed: Seed for the hold-out split, so the number is
@@ -352,6 +357,7 @@ def fit_calibration(
         screen_size=screen_size,
         camera_size=camera_size,
         distance_cm=distance_cm,
+        backend=backend,
         validation_error=validation_error,
         source=f"focusedgaze.calibration.fitter.fit_calibration degree={degree}",
     )
@@ -367,6 +373,7 @@ def robust_fit_samples(
     screen_size: tuple[int, int] | None = None,
     camera_size: tuple[int, int] | None = DEFAULT_CAMERA_SIZE,
     distance_cm: float | None = None,
+    backend: str | None = None,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
     validation_seed: int = DEFAULT_VALIDATION_SEED,
 ) -> FitResult:
@@ -433,6 +440,7 @@ def robust_fit_samples(
         screen_size=screen_size,
         camera_size=camera_size,
         distance_cm=distance_cm,
+        backend=backend,
         validation_error=validation_error,
         n_dropped=n_dropped,
         source=(

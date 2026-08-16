@@ -318,16 +318,25 @@ class ModelConfig:
     plausible, smooth, wrong answer rather than a crash. Audit 32.6b.
     """
 
-    #: Which gaze model to load. ``"l2cs"`` is the original and remains the
-    #: default so no existing profile, fixture or measurement changes meaning.
-    #: ``"intel"`` selects ``gaze-estimation-adas-0002``, which is Apache-2.0
-    #: (so it can ship in the wheel) and measured at 2.16 ms on CPU against
-    #: L2CS's 141.7 ms through DirectML on the same machine.
+    #: Which gaze model to load. ``"intel"`` selects
+    #: ``gaze-estimation-adas-0002``: Apache-2.0, so this package may fetch it
+    #: unprompted, and measured at 2.0 ms on CPU against L2CS's 141.7 ms through
+    #: DirectML on the same machine, at 1.43 cm of error against 1.96 cm.
+    #:
+    #: It is the default because ``"l2cs"`` cannot be. Those weights derive from
+    #: Gaze360 and this package is not permitted to distribute or fetch them, so
+    #: an install defaulting to L2CS has no working first run at all -- every
+    #: command that loads a model stops at a licence notice and a manual
+    #: conversion step. A default has to be reachable by somebody who has only
+    #: just installed the package. L2CS remains fully supported behind
+    #: ``--backend l2cs``; see ``docs/getting-started.md``.
     #:
     #: The two are **not interchangeable at runtime**: they have different angle
     #: conventions and a profile calibrated against one does not apply to the
-    #: other. Switching backends means recalibrating.
-    backend: str = "l2cs"
+    #: other. Switching backends means recalibrating, which
+    #: :class:`~focusedgaze.calibration.profile.CalibrationProfile` now records
+    #: and enforces rather than leaving to the reader.
+    backend: str = "intel"
     bins: int = 90                                                  # gaze_pipeline.py:17
     input_size: int = 448                                           # gaze_pipeline.py:51
     imagenet_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)  # gaze_pipeline.py:20

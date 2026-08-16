@@ -65,6 +65,35 @@ _log = logging.getLogger(__name__)
 _EYE_SIZE: Final = 60
 
 
+def _check_profile_backend(
+    profile: CalibrationProfile | None, backend: str
+) -> None:
+    """Refuse a profile fitted against the other backend; warn if unrecorded.
+
+    A profile is a polynomial in (pitch, yaw), and the two backends do not
+    report the same pitch and yaw for the same eye: L2CS decodes a
+    softmax-weighted expectation over angle bins, the Intel graph emits a
+    direction vector that ``_angles_from_vector`` converts. Feeding one's angles
+    to the other's polynomial evaluates fine and lands somewhere wrong -- no
+    exception, no missing file, just a cursor that misses by a distance nobody
+    can account for.
+
+    Raises:
+        CalibrationError: when the profile names a different backend. It is a
+            calibration problem and the remedy is a calibration, so it carries
+            the same exception as every other reason a profile is unusable.
+    """
+    if profile is None:
+        return
+    complaint = profile.backend_complaint(backend)
+    if complaint is None:
+        return
+    severity, message = complaint
+    if severity == "fail":
+        raise CalibrationError(message)
+    _log.warning("%s", message)
+
+
 def _build_model(config: ModelConfig) -> Any:
     """The gaze backend named by the config.
 
@@ -124,6 +153,13 @@ class GazeEstimator:
     ) -> None:
         self._config = config if config is not None else GazeConfig()
         self._profile = profile
+        # Checked here because this is where a profile and a model first meet.
+        # The tracker, the CLI commands and a library caller all arrive at this
+        # constructor, so one check covers them; putting it in the CLI would
+        # leave `GazeEstimator(profile=..., config=...)` free to do the wrong
+        # thing silently, which is the case that produces a bug report reading
+        # "accuracy is bad" rather than an error anyone can act on.
+        _check_profile_backend(self._profile, self._config.model.backend)
         self._landmarker = landmarker or FaceLandmarker(config=self._config.landmarks)
         self._model = model if model is not None else _build_model(self._config.model)
         self._gate = PositioningGate(self._config.positioning, focal)

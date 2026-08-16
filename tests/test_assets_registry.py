@@ -152,7 +152,7 @@ def test_the_pytorch_checkpoint_is_not_a_runtime_asset() -> None:
     assert GAZE_WEIGHTS.required_at_runtime is False
     assert GAZE_WEIGHTS.filename.endswith(".pkl")
     assert GAZE_MODEL.filename.endswith(".onnx")
-    names = [a.name for a in runtime_assets()]
+    names = [a.name for a in runtime_assets("l2cs")]
     assert names == ["face_landmarker", "gaze_model"]
 
 

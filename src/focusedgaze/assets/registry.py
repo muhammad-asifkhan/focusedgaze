@@ -412,7 +412,17 @@ def get_asset(name: str) -> ModelAsset:
 #: Repeated from :attr:`focusedgaze.config.ModelConfig.backend` rather than
 #: imported, so the asset registry stays free of the config module. The two must
 #: agree; ``test_assets_registry`` pins that they do.
-DEFAULT_BACKEND: Final = "l2cs"
+#:
+#: ``"intel"`` rather than ``"l2cs"``, and the reason is this module's subject.
+#: A default backend whose weights this package is forbidden to fetch makes the
+#: designed first-run state an unrecoverable one: every model-loading command on
+#: a fresh install ended at :data:`GAZE_MODEL`'s instructions, which say to go
+#: and obtain a 91 MB checkpoint by hand. That is a reasonable thing to ask of
+#: somebody who has chosen L2CS and an unreasonable thing to demand of somebody
+#: who has just installed the package. The Apache-2.0 backend downloads, and
+#: measured better on this machine besides -- 1.43 cm against 1.96 cm, 2.0 ms
+#: against 141.7 ms -- so the licence-clean choice costs nothing to prefer.
+DEFAULT_BACKEND: Final = "intel"
 
 
 def runtime_assets(backend: str = DEFAULT_BACKEND) -> tuple[ModelAsset, ...]:

@@ -23,6 +23,7 @@ the ``resolve_input`` hook.
 
 from __future__ import annotations
 
+from .live import STALE_AFTER_S, LiveGazeSource
 from .websocket import (
     DEFAULT_HOST,
     DEFAULT_PAUSE_TIMEOUT_S,
@@ -44,9 +45,11 @@ __all__ = [
     "DEFAULT_PORT",
     "DEFAULT_RESUME_SETTLE_S",
     "DEFAULT_SEND_HZ",
+    "STALE_AFTER_S",
     "GazeServer",
     "GazeSnapshot",
     "GazeSource",
+    "LiveGazeSource",
     "gaze_message",
     "minimal_input_message",
     "validate_host",

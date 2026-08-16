@@ -541,7 +541,10 @@ def test_ensure_all_separates_a_refusal_from_a_failure(cache: pathlib.Path) -> N
     def offline(url: str, start_byte: int, timeout: float) -> RemoteStream:
         raise urllib.error.URLError("no route to host")
 
-    reports = ensure_all(transport=offline)
+    # Explicitly l2cs: this test's subject is the "manual" state, and only the
+    # L2CS gaze model produces one. The default backend is intel, whose assets
+    # are all auto-downloadable and would make every report here "failed".
+    reports = ensure_all(transport=offline, backend="l2cs")
     by_name = {r.asset.name: r for r in reports}
 
     assert list(by_name) == ["face_landmarker", "gaze_model"]

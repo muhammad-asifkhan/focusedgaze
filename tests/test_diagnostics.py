@@ -97,7 +97,9 @@ def test_a_missing_auto_downloadable_model_says_to_run_download_models(tmp_path)
 
 def test_a_missing_manual_model_carries_the_licence_instructions(tmp_path) -> None:
     """Not a generic 'run download-models': this one is never fetched."""
-    results = {r.name: r for r in check_models(_model_env(tmp_path))}
+    # The manual asset belongs to l2cs, so the backend has to be named: on the
+    # default (intel) this asset is correctly not reported at all.
+    results = {r.name: r for r in check_models(_model_env(tmp_path), "l2cs")}
     gaze = results["model:gaze_model"]
     assert gaze.status == "fail"
     assert "non-commercial" in gaze.remedy
@@ -316,9 +318,39 @@ def test_the_checks_come_in_a_deliberate_order(tmp_path) -> None:
         env=_model_env(tmp_path),
         providers=lambda: ["DmlExecutionProvider"],
         profile_directory=str(tmp_path),
+        backend="l2cs",
     )
     assert results[0].name == "interpreter"
     assert results[1].name == "onnx-provider"
+
+
+def test_the_runtime_check_follows_the_selected_backend(tmp_path) -> None:
+    """Each backend needs a different runtime, and neither implies the other.
+
+    Reporting a missing onnxruntime to somebody running Intel would be a failure
+    for a package they have no reason to have installed -- the same false alarm
+    `runtime_assets` avoids for model files.
+    """
+    intel = run_checks(
+        camera=False,
+        env=_model_env(tmp_path),
+        providers=lambda: (_ for _ in ()).throw(AssertionError("must not be consulted")),
+        devices=lambda: ["CPU"],
+        profile_directory=str(tmp_path),
+        backend="intel",
+    )
+    assert intel[1].name == "openvino-runtime"
+    assert intel[1].status == "ok"
+
+    absent = run_checks(
+        camera=False,
+        env=_model_env(tmp_path),
+        devices=lambda: (_ for _ in ()).throw(ImportError("no openvino")),
+        profile_directory=str(tmp_path),
+        backend="intel",
+    )
+    assert absent[1].status == "fail"
+    assert "focusedgaze[intel]" in absent[1].remedy
 
 
 @pytest.mark.parametrize(

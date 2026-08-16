@@ -57,7 +57,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import combinations_with_replacement
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -72,6 +72,7 @@ __all__ = [
     "PROFILE_DIR_ENV",
     "PROFILE_SUFFIX",
     "SCHEMA_VERSION",
+    "BackendSeverity",
     "CalibrationProfile",
     "active_profile_name",
     "delete_profile",
@@ -81,6 +82,7 @@ __all__ = [
     "migrate_pickle",
     "polynomial_powers",
     "profiles_dir",
+    "profiles_for_backend",
     "set_active_profile",
 ]
 
@@ -102,6 +104,18 @@ ACTIVE_POINTER_NAME: Final = "active.pointer"
 #: Overrides the platform config directory. Exists so a test, a CI job or a
 #: portable install can redirect profiles without a hard-coded path (rule 5).
 PROFILE_DIR_ENV: Final = "FOCUSEDGAZE_PROFILE_DIR"
+
+#: The gaze backends a profile may be stamped with. Repeated from
+#: :data:`focusedgaze.config._BACKENDS` rather than imported, for the reason
+#: :data:`focusedgaze.assets.registry.DEFAULT_BACKEND` is: this module is
+#: imported by ``diagnostics`` and must not drag the config module in behind it.
+#: ``test_calibration_profile`` pins that the two lists agree.
+_BACKENDS: Final[tuple[str, ...]] = ("l2cs", "intel")
+
+#: Severity of a backend disagreement. Spelled out here rather than imported
+#: from ``diagnostics``, which imports this module: the two words are the same
+#: two words, and a cycle to share them would be a poor trade.
+BackendSeverity = Literal["warn", "fail"]
 
 #: The shipping capture resolution (audit section 7). Used as the literal
 #: default for ``camera_size`` so no caller has to invent one. There is no
@@ -249,6 +263,27 @@ def _as_optional_distance(value: object) -> float | None:
     return out
 
 
+def _as_optional_backend(value: object) -> str | None:
+    """Validate a recorded backend name.
+
+    An empty string is normalised to ``None``: it is what a missing JSON field
+    coerced through ``str()`` becomes, and "unknown" is the honest reading of it
+    rather than "a backend whose name is blank".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CalibrationError(f"backend must be a string or None, got {value!r}")
+    name = value.strip().lower()
+    if not name:
+        return None
+    if name not in _BACKENDS:
+        raise CalibrationError(
+            f"unknown backend {value!r}; known backends: {', '.join(_BACKENDS)}"
+        )
+    return name
+
+
 @dataclass(frozen=True, eq=False)
 class CalibrationProfile:
     """A fitted (pitch, yaw) -> normalised (x, y) polynomial, and its provenance.
@@ -316,6 +351,21 @@ class CalibrationProfile:
     #: a geometric prediction of 0.71-0.78 for exactly that mismatch. See
     #: :meth:`rescaled_for`.
     distance_cm: float | None = None
+    #: Which gaze backend produced the samples this was fitted to, or ``None``
+    #: for a profile written before the field existed. **Also not metadata.**
+    #: The two backends report different angles for the same eye -- L2CS decodes
+    #: a binned expectation, the Intel graph emits a direction vector -- so a
+    #: polynomial fitted against one is meaningless applied to the other. It does
+    #: not fail: it maps a real gaze to a confidently wrong screen point, which
+    #: is the shape of error this project has been bitten by before.
+    #:
+    #: ``None`` is genuinely unknown and is treated as such by
+    #: :meth:`backend_complaint`: warned about, never silently accepted and never
+    #: refused. Every profile fitted before this build lacks the field while
+    #: being perfectly valid for whichever backend made it, so refusing them
+    #: would destroy good calibrations to enforce a record that did not exist
+    #: when they were written.
+    backend: str | None = None
     created_at: str = ""
     validation_error: float | None = None
     fit_error: float | None = None
@@ -392,6 +442,7 @@ class CalibrationProfile:
         set_(self, "intercept_x", intercept_x)
         set_(self, "intercept_y", intercept_y)
         set_(self, "distance_cm", _as_optional_distance(self.distance_cm))
+        set_(self, "backend", _as_optional_backend(self.backend))
         set_(self, "screen_size", _as_size(self.screen_size, "screen_size"))
         set_(self, "camera_size", _as_size(self.camera_size, "camera_size"))
         set_(self, "created_at", self.created_at or _utc_now_iso())
@@ -571,6 +622,56 @@ class CalibrationProfile:
 
     __call__ = apply
 
+    # -- backend agreement --------------------------------------------------
+
+    def backend_complaint(self, backend: str | None) -> tuple[BackendSeverity, str] | None:
+        """Whether this profile may be used with ``backend``, and what to say.
+
+        Returns ``None`` when the two agree, or ``(severity, message)`` when
+        they do not. Three cases, deliberately not two:
+
+        * **Known and different** -- ``"fail"``. The profile was fitted against
+          the other model's angle convention. Applying it produces a plausible,
+          smooth, wrong screen position, so this is refused rather than warned
+          about: a caller that carried on would be doing arithmetic nobody can
+          interpret.
+        * **Unknown** (``self.backend is None``) -- ``"warn"``. Written before
+          the field existed. It may well be correct; nothing here can tell. Say
+          so and continue, because the alternative is discarding calibrations
+          that were fine.
+        * **Agreeing, or no backend named by the caller** -- ``None``.
+
+        Returning the severity rather than raising keeps the decision with the
+        caller: ``check`` renders it as a line, the runtime commands stop on it,
+        and neither needs a try/except to tell the two cases apart.
+        """
+        if backend is None:
+            return None
+        if self.backend is None:
+            return (
+                "warn",
+                (
+                    f"profile {self.name!r} does not record which backend it was "
+                    f"calibrated against, and is being used with {backend!r}. If it "
+                    f"was fitted against the other model the mapping will be wrong "
+                    f"in a way that looks like poor accuracy rather than an error. "
+                    f"Re-run: focusedgaze calibrate --backend {backend} --name {self.name}"
+                ),
+            )
+        if self.backend != backend:
+            return (
+                "fail",
+                (
+                    f"profile {self.name!r} was calibrated against the {self.backend!r} "
+                    f"backend and cannot be used with {backend!r}. The two report "
+                    f"different angles for the same eye, so this profile would map "
+                    f"your gaze to the wrong place rather than fail. Either run with "
+                    f"--backend {self.backend}, or calibrate for this one: "
+                    f"focusedgaze calibrate --backend {backend} --name {self.name}"
+                ),
+            )
+        return None
+
     # -- serialisation ------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
@@ -603,6 +704,10 @@ class CalibrationProfile:
             # both backward compatible (old profiles simply lack it) and forward
             # compatible (an older build ignores it).
             "distance_cm": self.distance_cm,
+            # Added on the same terms as distance_cm above, and for the same
+            # reason: strict equality on schema_version means a bump would
+            # reject every profile in existence to record one new string.
+            "backend": self.backend,
             "validation_error": self.validation_error,
             "fit_error": self.fit_error,
             "n_samples": self.n_samples,
@@ -681,6 +786,7 @@ class CalibrationProfile:
             screen_size=_as_size(data.get("screen_size"), "screen_size"),
             camera_size=_as_size(data.get("camera_size"), "camera_size"),
             distance_cm=_as_optional_distance(data.get("distance_cm")),
+            backend=_as_optional_backend(data.get("backend")),
             created_at=str(data.get("created_at") or ""),
             validation_error=_as_optional_error(data.get("validation_error"), "validation_error"),
             fit_error=_as_optional_error(data.get("fit_error"), "fit_error"),
@@ -815,6 +921,23 @@ def iter_profiles(directory: str | Path | None = None) -> Iterator[CalibrationPr
             yield CalibrationProfile.load(name, directory=directory)
         except CalibrationError as exc:   # ProfileVersionError is a subclass
             _log.warning("skipping unreadable calibration profile %r: %s", name, exc)
+
+
+def profiles_for_backend(
+    backend: str, directory: str | Path | None = None
+) -> list[str]:
+    """Names of saved profiles that were calibrated against ``backend``.
+
+    Exists so a backend mismatch can say "use this one" rather than only "not
+    that one". A user who keeps a profile per backend -- which is what switching
+    between them requires -- otherwise has to remember which name went with
+    which, and the tool already knows.
+
+    Profiles with no recorded backend are **excluded**: they might match and
+    might not, and naming one as a solution would be a guess dressed as an
+    answer. Unreadable profiles are skipped, as everywhere else in this module.
+    """
+    return [p.name for p in iter_profiles(directory) if p.backend == backend]
 
 
 def delete_profile(name: str, directory: str | Path | None = None) -> bool:

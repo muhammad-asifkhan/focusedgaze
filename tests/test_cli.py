@@ -443,17 +443,22 @@ def test_export_onnx_reports_a_missing_checkpoint(monkeypatch, tmp_path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_serve_without_a_source_says_what_to_do_rather_than_starting() -> None:
-    """The live source is Phase 2. Saying so beats binding a port with no feed.
+def test_serve_without_a_source_says_what_to_do_rather_than_starting(
+    monkeypatch, tmp_path
+) -> None:
+    """R-10: the launcher treats "port is listening" as "ready", so a server that
+    bound the port with nothing behind it would report success for a system that
+    can never produce a reading.
 
-    R-10: the launcher treats "port is listening" as "ready". A server that
-    opened the port with nothing behind it would report success for a system
-    that can never produce a reading.
+    The *reason* there is no feed changed -- the live source now exists, and what
+    is missing is a profile rather than an implementation -- but the rule did
+    not: refuse, and name the way forward.
     """
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
     code, output = run("serve")
     assert code == 1
-    assert "Phase 2" in output
     assert "--replay" in output
+    assert "--profile" in output
 
 
 def test_serve_rejects_a_malformed_replay_file(tmp_path) -> None:
@@ -1147,7 +1152,7 @@ def test_setup_reports_the_gaze_model_and_names_the_next_step(
         assets, "ensure_all",
         lambda **kw: (AssetReport(FACE_LANDMARKER, "present", None),),
     )
-    code, output = run("setup")
+    code, output = run("setup", "--backend", "l2cs")
     assert code == 1
     assert "gaze-model" in output
     assert "setup --weights" in output
@@ -1166,7 +1171,7 @@ def test_setup_does_not_print_the_licence_block_twice(monkeypatch) -> None:
             AssetReport(GAZE_MODEL, "manual", None, detail="Gaze360 restriction..."),
         ),
     )
-    _, output = run("setup")
+    _, output = run("setup", "--backend", "l2cs")
     assert output.count("Gaze360 restriction") == 0
 
 
@@ -1183,7 +1188,7 @@ def test_setup_names_both_install_lines_when_conversion_is_impossible(
     )
     monkeypatch.setattr(cli, "_missing_export_dependencies",
                         lambda: ["torch", "onnx", "l2cs"])
-    code, output = run("setup", "--weights", str(tmp_path / "weights.pkl"))
+    code, output = run("setup", "--backend", "l2cs", "--weights", str(tmp_path / "weights.pkl"))
     assert code == 1
     assert "focusedgaze[export]" in output
     assert "git+https://github.com/Ahmednull/L2CS-Net.git" in output
@@ -1199,7 +1204,7 @@ def test_setup_offers_both_ways_to_supply_the_graph(monkeypatch, tmp_path) -> No
         assets, "ensure_all",
         lambda **kw: (AssetReport(FACE_LANDMARKER, "present", None),),
     )
-    _, output = run("setup")
+    _, output = run("setup", "--backend", "l2cs")
     assert "--onnx" in output
     assert "--weights" in output
 
@@ -1219,7 +1224,7 @@ def test_installing_a_missing_onnx_is_reported(monkeypatch, tmp_path) -> None:
         lambda **kw: (AssetReport(FACE_LANDMARKER, "present", None),),
     )
     monkeypatch.setenv("FOCUSEDGAZE_MODEL_DIR", str(tmp_path))
-    code, output = run("setup", "--onnx", str(tmp_path / "absent.onnx"))
+    code, output = run("setup", "--backend", "l2cs", "--onnx", str(tmp_path / "absent.onnx"))
     assert code == 1
     assert "no file at" in output
 
@@ -1242,7 +1247,7 @@ def test_a_file_that_is_not_a_gaze_model_never_reaches_the_cache(
     impostor = tmp_path / "not-a-model.onnx"
     impostor.write_bytes(b"this is not an ONNX graph")
 
-    code, output = run("setup", "--onnx", str(impostor))
+    code, output = run("setup", "--backend", "l2cs", "--onnx", str(impostor))
     assert code == 1
     assert "did not load as a gaze model" in output
     assert not (tmp_path / GAZE_MODEL.filename).exists(), (
@@ -1279,7 +1284,7 @@ def test_a_valid_graph_is_placed_where_the_runtime_reads(monkeypatch, tmp_path) 
     handed_over = tmp_path / "from-a-colleague.onnx"
     handed_over.write_bytes(b"pretend graph")
 
-    code, output = run("setup", "--onnx", str(handed_over))
+    code, output = run("setup", "--backend", "l2cs", "--onnx", str(handed_over))
     installed = tmp_path / GAZE_MODEL.filename
     assert installed.exists(), output
     assert installed.read_bytes() == b"pretend graph"
@@ -1302,7 +1307,7 @@ def test_installing_the_graph_already_in_place_is_a_no_op(monkeypatch, tmp_path)
     installed.write_bytes(b"placeholder")
 
     # Present already, so setup reports it rather than reinstalling.
-    _, output = run("setup", "--onnx", str(installed))
+    _, output = run("setup", "--backend", "l2cs", "--onnx", str(installed))
     assert "present at" in output or "already in place" in output
 
 
@@ -1315,3 +1320,233 @@ def test_export_defaults_into_the_directory_the_runtime_reads(monkeypatch) -> No
     args = _build_parser().parse_args(["export-onnx", "--weights", "w.pkl"])
     assert args.output is None
     assert asset_path(GAZE_MODEL).name == GAZE_MODEL.filename
+
+
+# ---------------------------------------------------------------------------
+# FOCUSEDGAZE_BACKEND
+#
+# The flag alone made the non-default backend cost a repetition on every single
+# command, which is a tax on exactly the users who did not choose the default.
+# Read in the CLI and nowhere else: `config.py` reads no environment at all, so
+# `GazeConfig()` keeps meaning what it says.
+
+
+def _args(**kw):
+    import argparse
+
+    return argparse.Namespace(**kw)
+
+
+def test_the_cli_backend_names_agree_with_the_config_ones() -> None:
+    """Hand-copied so the parser does not import `config`. Checked, therefore."""
+    from focusedgaze.cli import _BACKEND_NAMES
+    from focusedgaze.config import _BACKENDS
+
+    assert _BACKEND_NAMES == _BACKENDS
+
+
+def test_the_environment_selects_the_backend_when_the_flag_is_absent() -> None:
+    from focusedgaze.cli import BACKEND_ENV, _config_for
+
+    config = _config_for(_args(backend=None), env={BACKEND_ENV: "l2cs"})
+    assert config.model.backend == "l2cs"
+
+
+def test_the_flag_beats_the_environment() -> None:
+    """The more specific instruction wins: typing it here means it for here."""
+    from focusedgaze.cli import BACKEND_ENV, _config_for
+
+    config = _config_for(_args(backend="intel"), env={BACKEND_ENV: "l2cs"})
+    assert config.model.backend == "intel"
+
+
+def test_an_unset_or_blank_variable_leaves_the_default_alone() -> None:
+    """A blank value is what an unset shell variable expands to in a script."""
+    from focusedgaze.cli import BACKEND_ENV, _config_for
+    from focusedgaze.config import GazeConfig
+
+    default = GazeConfig().model.backend
+    assert _config_for(_args(backend=None), env={}).model.backend == default
+    assert _config_for(
+        _args(backend=None), env={BACKEND_ENV: "   "}
+    ).model.backend == default
+
+
+def test_a_nonsense_backend_in_the_environment_is_reported_by_name() -> None:
+    """It is invisible on the command line, so the error has to name where it
+    came from or the user cannot find it."""
+    from focusedgaze.cli import BACKEND_ENV, _config_for
+    from focusedgaze.exceptions import ConfigError
+
+    with pytest.raises(ConfigError, match=BACKEND_ENV):
+        _config_for(_args(backend=None), env={BACKEND_ENV: "opencv"})
+
+
+def test_the_environment_reaches_a_real_command(monkeypatch, tmp_path) -> None:
+    """The unit above proves the resolution; this proves it is wired in."""
+    from focusedgaze.cli import BACKEND_ENV
+
+    monkeypatch.setenv(BACKEND_ENV, "l2cs")
+    monkeypatch.setenv("FOCUSEDGAZE_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path / "profiles"))
+    _, output = run("check", "--no-camera")
+    assert "l2cs_gaze360.onnx" in output, "the environment did not select l2cs"
+
+
+# ---------------------------------------------------------------------------
+# Naming a profile that would work.
+
+
+def _profile_for(tmp_path, name: str, backend: str | None) -> None:
+    import numpy as np
+
+    from focusedgaze.calibration.profile import CalibrationProfile
+
+    CalibrationProfile(
+        degree=1,
+        powers=np.array([[1, 0], [0, 1]], dtype=np.int64),
+        coef_x=np.array([1.0, 0.0]),
+        coef_y=np.array([0.0, 1.0]),
+        intercept_x=0.5,
+        intercept_y=0.5,
+        name=name,
+        backend=backend,
+    ).save(directory=str(tmp_path))
+
+
+def test_a_mismatch_names_a_profile_that_would_work(monkeypatch, tmp_path) -> None:
+    """"Not that one" is half an answer when the right one is already on disk."""
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    _profile_for(tmp_path, "mine-l2cs", "l2cs")
+    _profile_for(tmp_path, "mine-intel", "intel")
+
+    code, output = run("demo", "--profile", "mine-l2cs", "--backend", "intel")
+    assert code == 1
+    assert "mine-intel" in output, "the usable profile was not offered"
+    assert "--profile mine-intel" in output
+
+
+def test_an_unstamped_profile_is_never_offered_as_the_answer(
+    monkeypatch, tmp_path
+) -> None:
+    """It might match and might not. Naming it would be a guess dressed as an
+    answer, which is worse than saying nothing."""
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    _profile_for(tmp_path, "mine-l2cs", "l2cs")
+    _profile_for(tmp_path, "unknown-origin", None)
+
+    code, output = run("demo", "--profile", "mine-l2cs", "--backend", "intel")
+    assert code == 1
+    assert "unknown-origin" not in output
+
+
+def test_a_matching_profile_is_not_blocked(monkeypatch, tmp_path) -> None:
+    """The guard must not stand in the way of the working case."""
+    from focusedgaze.cli import _profile_backend_error
+
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    _profile_for(tmp_path, "mine-intel", "intel")
+    args = _args(backend="intel", directory=None, command="demo")
+    assert _profile_backend_error(args, "mine-intel") is None
+
+
+def test_no_profile_given_is_not_a_mismatch(monkeypatch, tmp_path) -> None:
+    """Uncalibrated is a supported mode of `demo`, not an error."""
+    from focusedgaze.cli import _profile_backend_error
+
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    args = _args(backend="intel", directory=None, command="demo")
+    assert _profile_backend_error(args, None) is None
+
+
+# ---------------------------------------------------------------------------
+# serve, live
+#
+# The command previously refused to run without --replay, citing a phase that
+# had already shipped. These pin the refusal that remains (no profile) and the
+# routing, not the capture itself: that is `test_server_live.py`'s subject.
+
+
+def test_serve_without_a_profile_explains_why_rather_than_serving(
+    monkeypatch, tmp_path
+) -> None:
+    """Serving uncalibrated would connect, pace correctly, and report ok:false
+    forever. Declining is the better failure."""
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    code, output = run("serve")
+    assert code == 1
+    assert "needs a calibration profile" in output
+    assert "--replay" in output, "the recording route was not offered"
+    assert "Phase 2" not in output, "the stale phase message survived"
+
+
+def test_serve_takes_the_camera_by_default(monkeypatch, tmp_path) -> None:
+    """The routing change: no --replay now means live, not an error."""
+
+    _profile_for(tmp_path, "me-intel", "intel")
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+
+    built = {}
+
+    class _Source:
+        def __init__(self, profile=None, config=None):
+            built["profile"] = profile
+            built["backend"] = config.model.backend
+
+        def start(self): built["started"] = True
+        def close(self): built["closed"] = True
+        def latest(self): raise AssertionError("not reached")
+        def pause(self, timeout=4.0): return True
+        def resume(self): return True
+
+    class _Server:
+        def __init__(self, source, **kw): built["served"] = True
+        async def serve_forever(self): return None
+
+    import focusedgaze.server as server_mod
+
+    monkeypatch.setattr(server_mod, "LiveGazeSource", _Source)
+    monkeypatch.setattr(server_mod, "GazeServer", _Server)
+
+    code, output = run("serve", "--profile", "me-intel")
+    assert code == 0
+    assert built.get("started") and built.get("served")
+    assert built.get("closed"), "the camera was not released on the way out"
+    assert built["profile"] == "me-intel"
+    assert "Serving live gaze" in output
+
+
+def test_serve_refuses_a_profile_from_the_other_backend(monkeypatch, tmp_path) -> None:
+    _profile_for(tmp_path, "me-l2cs", "l2cs")
+    monkeypatch.setenv("FOCUSEDGAZE_PROFILE_DIR", str(tmp_path))
+    code, output = run("serve", "--profile", "me-l2cs", "--backend", "intel")
+    assert code == 1
+    assert "calibrated against the 'l2cs' backend" in output
+
+
+def test_replay_still_works_and_needs_no_profile(tmp_path) -> None:
+    """The recording route is how the wire format is exercised without a camera,
+    and it must not have acquired a profile requirement."""
+    import json
+
+    recording = tmp_path / "readings.json"
+    recording.write_text(json.dumps([[True, 0.5, 0.5]]), encoding="utf-8")
+
+
+    served = {}
+
+    class _Server:
+        def __init__(self, source, **kw): served["source"] = source
+        async def serve_forever(self): return None
+
+    import focusedgaze.server as server_mod
+    original = server_mod.GazeServer
+    server_mod.GazeServer = _Server
+    try:
+        code, output = run("serve", "--replay", str(recording))
+    finally:
+        server_mod.GazeServer = original
+
+    assert code == 0
+    assert "Replaying 1 readings" in output
+    assert served["source"].latest().x == pytest.approx(0.5)

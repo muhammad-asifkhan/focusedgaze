@@ -67,10 +67,12 @@ LEGACY_DEFAULTS: list[tuple[str, str, object, str]] = [
     ("filter", "beta", 0.6, "gaze_server.py:101"),
     ("filter", "d_cutoff", 1.0, "gaze_server.py:102"),
 
-    # "l2cs" keeps the original backend as the default, so no existing profile,
-    # fixture or recorded measurement changes meaning when the Intel backend
-    # became available.
-    ("model", "backend", "l2cs", "new in this build; the original stays default"),
+    # "intel" because it is the only backend a fresh install can reach: the L2CS
+    # weights may not be distributed or fetched by this package, so defaulting to
+    # them left every model-loading command on a new install ending at a licence
+    # notice and a manual conversion. Pinned here because flipping it back would
+    # restore that, silently.
+    ("model", "backend", "intel", "the only default a fresh install can reach"),
 
     ("positioning", "min_distance_cm", 45.0, "positioning_gate.py:30"),
     ("positioning", "max_distance_cm", 65.0, "positioning_gate.py:31"),

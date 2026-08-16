@@ -540,3 +540,76 @@ def test_the_context_manager_closes_the_landmarker() -> None:
     with est:
         pass
     assert closed == [True]
+
+
+# ---------------------------------------------------------------------------
+# The profile must belong to the backend that is running.
+#
+# Checked in the constructor because that is where a profile and a model first
+# meet, and because every route in -- the tracker, the CLI, a library caller --
+# arrives here. Enforcing it in `cli.py` instead would leave
+# `GazeEstimator(profile=..., config=...)` free to produce coordinates that are
+# smoothly, confidently wrong.
+
+
+def _backend_profile(backend):
+    from focusedgaze.calibration.profile import CalibrationProfile
+
+    return CalibrationProfile(
+        degree=1,
+        powers=np.array([[1, 0], [0, 1]], dtype=np.int64),
+        coef_x=np.array([1.0, 0.0]),
+        coef_y=np.array([0.0, 1.0]),
+        intercept_x=0.5,
+        intercept_y=0.5,
+        name="mine",
+        backend=backend,
+    )
+
+
+def test_a_profile_from_the_other_backend_is_refused_at_construction() -> None:
+    """Not at the first frame, and not never: before anything can use it."""
+    from dataclasses import replace
+
+    config = replace(GazeConfig(), model=replace(GazeConfig().model, backend="intel"))
+    with pytest.raises(CalibrationError, match="calibrated against the 'l2cs' backend"):
+        GazeEstimator(
+            profile=_backend_profile("l2cs"),
+            config=config,
+            landmarker=StubLandmarker([_face(0.5, 0.5)]),
+            model=StubModel(),
+        )
+
+
+def test_a_profile_from_the_running_backend_is_accepted() -> None:
+    from dataclasses import replace
+
+    config = replace(GazeConfig(), model=replace(GazeConfig().model, backend="intel"))
+    est = GazeEstimator(
+        profile=_backend_profile("intel"),
+        config=config,
+        landmarker=StubLandmarker([_face(0.5, 0.5)]),
+        model=StubModel(),
+    )
+    assert est.profile is not None
+
+
+def test_an_unstamped_profile_is_allowed_through_with_a_warning(caplog) -> None:
+    """Every profile written before this build lacks the stamp. Refusing them
+    would break working setups to enforce a record that did not exist yet."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="focusedgaze.core.estimator"):
+        est = GazeEstimator(
+            profile=_backend_profile(None),
+            config=GazeConfig(),
+            landmarker=StubLandmarker([_face(0.5, 0.5)]),
+            model=StubModel(),
+        )
+    assert est.profile is not None
+    assert "does not record which backend" in caplog.text
+
+
+def test_no_profile_means_nothing_to_disagree_with() -> None:
+    """Uncalibrated is a supported mode, not a mismatch."""
+    assert _estimator([_face(0.5, 0.5)]).profile is None

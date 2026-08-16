@@ -41,7 +41,13 @@ import numpy as np
 from . import __version__
 from .assets import GAZE_MODEL, asset_path, model_dir, model_dir_override, runtime_assets
 from .assets.registry import DEFAULT_BACKEND, sha256_file
-from .calibration.profile import active_profile_name, list_profiles, profiles_dir
+from .calibration.profile import (
+    active_profile_name,
+    list_profiles,
+    load_active_profile,
+    profiles_dir,
+    profiles_for_backend,
+)
 from .capture import Frame, FrameSource
 from .config import CameraConfig
 from .exceptions import CameraError, GazeError
@@ -50,6 +56,8 @@ __all__ = [
     "BRIGHTNESS_FLOOR",
     "CheckResult",
     "Status",
+    "check_openvino",
+    "check_runtime",
     "run_checks",
 ]
 
@@ -103,6 +111,8 @@ class CheckResult:
 
 #: ``() -> sequence of provider names``. Injection seam.
 ProviderLister = Callable[[], Sequence[str]]
+#: ``() -> sequence of OpenVINO device names``. The Intel backend's equivalent.
+DeviceLister = Callable[[], Sequence[str]]
 #: ``() -> FrameSource``. Injection seam; the real one opens a webcam.
 SourceFactory = Callable[[], FrameSource]
 
@@ -115,6 +125,17 @@ def _list_providers() -> Sequence[str]:
 
     providers: Sequence[str] = onnxruntime.get_available_providers()
     return providers
+
+
+def _list_devices() -> Sequence[str]:
+    # Deferred for the same reason as _list_providers, and additionally because
+    # `openvino` is an optional extra: importing it at module scope would make
+    # every command fail on an install that does not have it, including the ones
+    # that never touch the Intel backend.
+    import openvino as ov  # type: ignore[import-not-found, import-untyped, unused-ignore]
+
+    devices: Sequence[str] = ov.Core().available_devices
+    return devices
 
 
 def _open_webcam() -> FrameSource:
@@ -200,6 +221,72 @@ def check_onnx_provider(providers: ProviderLister = _list_providers) -> CheckRes
         summary=f"accelerated provider available: {accelerated[0]}",
         detail={"providers": available},
     )
+
+
+def check_openvino(devices: DeviceLister = _list_devices) -> CheckResult:
+    """Is the OpenVINO runtime installed, and does it see a device?
+
+    The Intel backend's counterpart to :func:`check_onnx_provider`, and the same
+    kind of gap it was written to close. ``openvino`` is an optional extra, so a
+    ``pip install focusedgaze`` with no extras has the Intel *model files* --
+    they download unprompted, being Apache-2.0 -- and no runtime to load them
+    with. Every model check then passes and the first frame raises
+    :class:`~focusedgaze.exceptions.ProviderError` from
+    ``core/intel_model.py``, which is precisely the "check said it was fine"
+    failure this module exists to prevent.
+    """
+    try:
+        available = list(devices())
+    except ImportError:
+        return CheckResult(
+            name="openvino-runtime",
+            status="fail",
+            summary="the OpenVINO runtime is not installed, so the Intel gaze model cannot run",
+            remedy=(
+                "Install it: pip install 'focusedgaze[intel]'. It is Apache-2.0, "
+                "CPU-only by default, and runs on any x86 machine. Alternatively "
+                "run the other backend with --backend l2cs, which needs onnxruntime "
+                "and a gaze model you supply yourself."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - a broken install can raise anything
+        return CheckResult(
+            name="openvino-runtime",
+            status="fail",
+            summary=f"openvino is installed but did not report its devices: {exc}",
+            remedy="Reinstall the extra; the installation looks damaged.",
+        )
+
+    if not available:
+        return CheckResult(
+            name="openvino-runtime",
+            status="fail",
+            summary="openvino reports no devices at all",
+            remedy="Reinstall the extra: pip install 'focusedgaze[intel]'.",
+            detail={"devices": available},
+        )
+    return CheckResult(
+        name="openvino-runtime",
+        status="ok",
+        summary=f"OpenVINO runtime available: {', '.join(available)}",
+        detail={"devices": available},
+    )
+
+
+def check_runtime(
+    backend: str = DEFAULT_BACKEND,
+    providers: ProviderLister = _list_providers,
+    devices: DeviceLister = _list_devices,
+) -> CheckResult:
+    """The inference runtime for whichever backend is selected.
+
+    The two backends need entirely different runtimes -- ONNX Runtime for L2CS,
+    OpenVINO for Intel -- and neither is a dependency of the other. Checking
+    both unconditionally would report a missing onnxruntime as a failure to
+    somebody running Intel perfectly well, which is the same false alarm
+    :func:`~focusedgaze.assets.registry.runtime_assets` avoids for model files.
+    """
+    return check_openvino(devices) if backend == "intel" else check_onnx_provider(providers)
 
 
 def check_models(
@@ -297,12 +384,22 @@ def check_models(
     return results
 
 
-def check_calibration(directory: str | None = None) -> CheckResult:
-    """Is there a calibration, and is one selected?
+def check_calibration(
+    directory: str | None = None, backend: str | None = None
+) -> CheckResult:
+    """Is there a calibration, is one selected, and does it match the backend?
 
     Without one the pipeline still produces coordinates. They are simply the raw
     model output rather than anything mapped to this person's screen, which
     presents as "the cursor is in the wrong place" rather than as an error.
+
+    Args:
+        directory: Where profiles live. Defaults to the platform location.
+        backend: The gaze backend the user is about to run. When given, the
+            active profile's recorded backend is compared against it. That
+            mismatch is exactly this module's subject: it produces coordinates,
+            they are simply wrong, and nothing else in the system says so until
+            the estimator refuses to start.
     """
     try:
         names = list_profiles(directory)
@@ -344,11 +441,52 @@ def check_calibration(directory: str | None = None) -> CheckResult:
             remedy="Select an existing one: focusedgaze calibrate --activate NAME",
             detail={"active": active, "profiles": names},
         )
+    detail: dict[str, Any] = {"active": active, "profiles": names, "directory": str(where)}
+    if backend is not None:
+        # Loaded rather than inferred from the filename: the stamp is inside the
+        # document. A profile that will not load is a finding in its own right
+        # and is reported as one instead of being skipped.
+        try:
+            profile = load_active_profile(directory)
+        except GazeError as exc:
+            return CheckResult(
+                name="calibration",
+                status="fail",
+                summary=f"the active profile {active!r} could not be read: {exc}",
+                remedy="Re-run calibration: focusedgaze calibrate",
+                detail=detail,
+            )
+        complaint = profile.backend_complaint(backend)
+        if complaint is not None:
+            severity, message = complaint
+            # "Not that one" is only half an answer when the right one is
+            # already sitting on disk. Switching backends means keeping a
+            # profile per backend, so this is the common case, not a rare one.
+            usable = [n for n in profiles_for_backend(backend, directory) if n != active]
+            if usable:
+                message += (
+                    f"\nAlready calibrated for {backend}: {', '.join(usable)}. "
+                    f"Select one with: focusedgaze calibrate --activate {usable[0]}"
+                )
+            return CheckResult(
+                name="calibration",
+                status=severity,
+                summary=f"active profile {active!r} does not match the {backend} backend",
+                remedy=message,
+                detail={
+                    **detail,
+                    "profile_backend": profile.backend,
+                    "backend": backend,
+                    "usable_profiles": usable,
+                },
+            )
+        detail["profile_backend"] = profile.backend
+
     return CheckResult(
         name="calibration",
         status="ok",
         summary=f"active profile: {active} ({len(names)} available)",
-        detail={"active": active, "profiles": names, "directory": str(where)},
+        detail=detail,
     )
 
 
@@ -489,6 +627,7 @@ def run_checks(
     camera: bool = True,
     env: Mapping[str, str] | None = None,
     providers: ProviderLister = _list_providers,
+    devices: DeviceLister = _list_devices,
     source_factory: SourceFactory = _open_webcam,
     profile_directory: str | None = None,
     settle: bool = True,
@@ -499,15 +638,18 @@ def run_checks(
     Args:
         camera: Probe the webcam. ``False`` for a headless or CI run, where
             "no camera" is expected rather than diagnostic.
-        backend: Which gaze backend to report models for.
+        backend: Which gaze backend to report the runtime and models for.
 
     Ordered deliberately: interpreter, then the things that stop it working, then
     the things that make it worse than expected. A user reads until something is
     not ``ok``.
     """
-    results: list[CheckResult] = [check_interpreter(), check_onnx_provider(providers)]
+    results: list[CheckResult] = [
+        check_interpreter(),
+        check_runtime(backend, providers, devices),
+    ]
     results.extend(check_models(env, backend))
-    results.append(check_calibration(profile_directory))
+    results.append(check_calibration(profile_directory, backend))
     if camera:
         results.extend(check_camera(source_factory, settle=settle))
     else:

@@ -12,8 +12,9 @@ Eight commands:
     accuracy          measure calibration accuracy across the screen    (Phase 8)
 
 ``demo`` and the live path of ``serve`` both needed ``GazeEstimator``, which
-landed with Phase 2. ``serve --replay`` remains, because replaying recorded
-readings is how the wire format is tested without a camera.
+landed with Phase 2. ``serve`` now defaults to the camera through
+:class:`~focusedgaze.server.LiveGazeSource`; ``--replay`` remains, because
+replaying recorded readings is how the wire format is tested without one.
 
 ``calibrate`` and ``accuracy`` draw a full-screen dot through
 :mod:`focusedgaze.calibration.screen`. Both were previously unrunnable for the
@@ -42,7 +43,7 @@ import json
 import math
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final, TextIO
 
@@ -58,6 +59,16 @@ __all__ = ["main"]
 #: else as replacement characters. The project has already fixed one bug of
 #: exactly that shape (commit "Fix em-dash in CLI console output").
 _MARK: Final[dict[str, str]] = {"ok": "[ ok ]", "warn": "[warn]", "fail": "[FAIL]"}
+
+#: Selects the gaze backend for every command, so somebody who wants the
+#: non-default one does not have to type ``--backend`` on every invocation.
+#: Read by the CLI only; see :func:`_config_for` for why not by ``config.py``.
+BACKEND_ENV: Final = "FOCUSEDGAZE_BACKEND"
+
+#: The backend names the flag and the environment variable both accept. Spelled
+#: out rather than imported from ``config`` so that building the parser does not
+#: import the config module; ``test_cli`` pins that the two agree.
+_BACKEND_NAMES: Final[tuple[str, ...]] = ("l2cs", "intel")
 
 #: Consecutive usable frames before the sweep starts. At ~30 fps this is about a
 #: second of the user actually holding the position, which is long enough to
@@ -94,32 +105,71 @@ def _print_reports(reports: Sequence[Any], out: TextIO) -> int:
 def _add_backend_arg(parser: argparse.ArgumentParser) -> None:
     """The ``--backend`` flag, on every command that loads or checks a model.
 
-    Both backends are supported and neither is going away. L2CS stays the
-    default because it is what every existing profile, fixture and recorded
-    measurement was made against; Intel is the one that can be redistributed and
-    the one that runs at 2 ms instead of 142.
+    Both backends are supported and neither is going away. Intel is the default
+    because it is the only one a fresh install can actually reach: its weights
+    are Apache-2.0 and fetched automatically, where the L2CS weights may not be
+    distributed by this package at all. It also measured faster and slightly
+    more accurate here -- 2.0 ms against 142, 1.43 cm against 1.96.
+
+    ``default=None`` rather than the name itself, so that "not given" stays
+    distinguishable from "given, and happens to match the default". Two things
+    need that distinction: ``_cmd_calibrate``'s ``--from-samples`` branch, and
+    the :data:`BACKEND_ENV` fallback in :func:`_config_for`, which must not be
+    overridden by a default argparse invented.
     """
     parser.add_argument(
         "--backend",
-        choices=("l2cs", "intel"),
+        choices=_BACKEND_NAMES,
         default=None,
-        help="which gaze model to use. l2cs (default) is the original; intel is "
-             "Apache-2.0, ~70x faster here, and fetched automatically",
+        help=f"which gaze model to use. intel (default) is Apache-2.0, ~70x faster "
+             f"here, and fetched automatically; l2cs is the original and needs a "
+             f"model you supply yourself. Set {BACKEND_ENV} to change the default "
+             f"without typing this flag every time",
     )
 
 
-def _config_for(args: argparse.Namespace) -> Any:
+def _config_for(args: argparse.Namespace, env: Mapping[str, str] | None = None) -> Any:
     """A :class:`GazeConfig` with the command line's backend applied.
 
-    Returns the plain default when ``--backend`` was not given, so a command
-    that never had the flag behaves exactly as before.
+    Precedence, highest first: ``--backend``, then :data:`BACKEND_ENV`, then the
+    declared default in :class:`~focusedgaze.config.ModelConfig`. The flag wins
+    because it is the more specific instruction: somebody who typed a backend on
+    this command line means it for this command, whatever their shell says.
+
+    The environment is read **here and not in ``config.py``**, which reads no
+    environment at all. ``GazeConfig()`` is a library constructor, and a library
+    whose declared default silently changes with an ambient variable is the
+    "located rather than declared" trap ``assets/registry.py`` records this
+    project being bitten by three times. A CLI is the opposite case: configuring
+    it through the environment is what an environment is for, and the effect
+    stops at the process the user launched.
+
+    Raises:
+        ConfigError: if :data:`BACKEND_ENV` holds a name that is not a backend.
+            Named explicitly, because a bad value there is invisible on the
+            command line and the failure would otherwise be unattributable.
     """
+    import os
     from dataclasses import replace
 
     from .config import GazeConfig
+    from .exceptions import ConfigError
 
     config = GazeConfig()
     backend = getattr(args, "backend", None)
+    if not backend:
+        source = env if env is not None else os.environ
+        # An empty or whitespace-only value is what an unset shell variable
+        # expands to in a script. Treated as unset, per the same reasoning in
+        # `registry.model_dir_override`.
+        from_env = source.get(BACKEND_ENV, "").strip()
+        if from_env:
+            if from_env not in _BACKEND_NAMES:
+                raise ConfigError(
+                    f"{BACKEND_ENV}={from_env!r} is not a gaze backend; "
+                    f"expected one of {', '.join(_BACKEND_NAMES)}"
+                )
+            backend = from_env
     if backend:
         config = replace(config, model=replace(config.model, backend=backend))
     return config
@@ -128,6 +178,46 @@ def _config_for(args: argparse.Namespace) -> Any:
 def _backend_of(args: argparse.Namespace) -> str:
     """The backend name a command should report and fetch assets for."""
     return str(_config_for(args).model.backend)
+
+
+def _profile_backend_error(args: argparse.Namespace, name: str | None) -> str | None:
+    """The message to print instead of running, or ``None`` to carry on.
+
+    ``GazeEstimator`` refuses a mismatched profile on its own, and that check is
+    the one that matters because it also covers library callers. This runs first
+    so the CLI can say more than the pure layer honestly can: it knows where
+    profiles live, so it can name one that would work instead of only naming the
+    problem. Returns the text rather than printing it, so the caller keeps
+    control of the exit code.
+    """
+    if not name:
+        return None
+    from .calibration.profile import CalibrationProfile, profiles_for_backend
+    from .exceptions import CalibrationError
+
+    backend = _backend_of(args)
+    try:
+        profile = CalibrationProfile.load(name, directory=getattr(args, "directory", None))
+    except CalibrationError:
+        # Not this function's business: loading it again in a moment will raise
+        # with the message that actually describes the problem.
+        return None
+
+    complaint = profile.backend_complaint(backend)
+    if complaint is None or complaint[0] != "fail":
+        return None
+    message = complaint[1]
+    usable = [
+        n
+        for n in profiles_for_backend(backend, getattr(args, "directory", None))
+        if n != name
+    ]
+    if usable:
+        message += (
+            f"\n\nAlready calibrated for {backend}: {', '.join(usable)}.\n"
+            f"    focusedgaze {args.command} --profile {usable[0]}"
+        )
+    return message
 
 
 def _cmd_download_models(args: argparse.Namespace, out: TextIO) -> int:
@@ -239,7 +329,15 @@ def _cmd_calibrate(args: argparse.Namespace, out: TextIO) -> int:
 
     if args.from_samples:
         samples = _load_samples(args.from_samples)
-        result = robust_fit_samples(samples, name=args.name)
+        # getattr, not _backend_of: these samples were collected by something
+        # else, at some earlier time, and this process has no way to know which
+        # model produced the angles in the file. Stamping the default onto them
+        # would manufacture a provenance record out of nothing, which is worse
+        # than leaving it unknown -- an unknown backend is warned about, a wrong
+        # one is trusted. The user asserts it with --backend or not at all.
+        result = robust_fit_samples(
+            samples, name=args.name, backend=getattr(args, "backend", None)
+        )
         profile: CalibrationProfile = result.profile
         path = profile.save(directory=args.directory)
         print(f"Fitted {len(samples)} samples -> {path}", file=out)
@@ -402,6 +500,7 @@ def _run_interactive_calibration(args: argparse.Namespace, out: TextIO) -> int:
     fit = robust_fit_samples(
         samples, name=args.name, screen_size=screen.size,
         distance_cm=_median(tally.distances),
+        backend=_backend_of(args),
     )
     profile = fit.profile
     saved = profile.save(directory=args.directory)
@@ -702,6 +801,11 @@ def _cmd_accuracy(args: argparse.Namespace, out: TextIO) -> int:
             config,
             positioning=replace(config.positioning, compensate_distance=True),
         )
+    mismatch = _profile_backend_error(args, args.profile)
+    if mismatch is not None:
+        print(f"error: {mismatch}", file=out)
+        return 1
+
     profile = CalibrationProfile.load(args.profile)
     screen = (args.screen_width_cm, args.screen_height_cm)
     tracker = WebcamGazeTracker(profile=profile, config=config)
@@ -907,6 +1011,11 @@ def _cmd_demo(args: argparse.Namespace, out: TextIO) -> int:
     from .capture import WebcamGazeTracker
     from .types import GazeStatus
 
+    mismatch = _profile_backend_error(args, args.profile)
+    if mismatch is not None:
+        print(f"error: {mismatch}", file=out)
+        return 1
+
     tracker = WebcamGazeTracker(profile=args.profile, config=_config_for(args))
     print(f"Camera {tracker.source.size[0]}x{tracker.source.size[1]}, "
           f"provider {tracker.estimator.provider}. Ctrl+C to stop.", file=out)
@@ -942,30 +1051,16 @@ def _fmt_cm(value: float | None) -> str:
 def _cmd_serve(args: argparse.Namespace, out: TextIO) -> int:
     """Run the gaze WebSocket server.
 
-    The live source needs ``GazeEstimator``, which is Phase 2. Until it lands,
-    ``--replay`` is the only source, and it is a real one: it drives
-    ``gaze_test.html`` and the browser game exactly as a camera would, which is
-    what makes the wire format testable today rather than after Phase 2.
+    Two sources. The camera is the default; ``--replay`` walks a recorded JSON
+    file instead, which is how the wire format is exercised without hardware and
+    how a browser client is developed on a machine with no webcam.
     """
     import asyncio
 
     from .server import GazeServer, GazeSnapshot
 
     if not args.replay:
-        print(
-            "focusedgaze serve needs a gaze source.\n"
-            "\n"
-            "The live camera source is GazeEstimator, which is Phase 2 and is not\n"
-            "implemented yet. Until it lands, replay recorded readings:\n"
-            "\n"
-            "    focusedgaze serve --replay readings.json\n"
-            "\n"
-            "where readings.json is a list of [ok, x, y] rows, or an object with a\n"
-            '"readings" key holding one. That drives gaze_test.html and the game\n'
-            "over the real wire format.",
-            file=out,
-        )
-        return 1
+        return _serve_live(args, out)
 
     readings = _load_readings(args.replay)
     print(f"Replaying {len(readings)} readings at {args.hz:g} Hz.", file=out)
@@ -995,6 +1090,57 @@ def _cmd_serve(args: argparse.Namespace, out: TextIO) -> int:
         asyncio.run(server.serve_forever())
     except KeyboardInterrupt:
         print("\nStopped.", file=out)
+    return 0
+
+
+def _serve_live(args: argparse.Namespace, out: TextIO) -> int:
+    """Serve readings from the camera.
+
+    A profile is required and its absence is refused rather than worked around.
+    Without one the pipeline yields raw pitch and yaw, and the wire format has
+    no field for those -- every message would carry ``ok: false`` and a client
+    would see a server that connects, paces correctly and never reports a
+    position. That is a worse failure than declining to start.
+    """
+    import asyncio
+
+    from .server import GazeServer, LiveGazeSource
+
+    if not args.profile:
+        print(
+            "focusedgaze serve needs a calibration profile.\n"
+            "\n"
+            "    focusedgaze serve --profile NAME\n"
+            "\n"
+            "The wire format carries screen coordinates, and those come from a\n"
+            "profile: without one the pipeline has only raw angles, so every\n"
+            "message would say ok: false. Run 'focusedgaze calibrate' first, or\n"
+            "serve a recording instead with --replay.",
+            file=out,
+        )
+        return 1
+
+    mismatch = _profile_backend_error(args, args.profile)
+    if mismatch is not None:
+        print(f"error: {mismatch}", file=out)
+        return 1
+
+    source = LiveGazeSource(profile=args.profile, config=_config_for(args))
+    # Started before the server so a camera or model failure is reported here,
+    # with its own remedy, instead of surfacing once a client has connected.
+    source.start()
+    server = GazeServer(source, host=args.host, port=args.port, send_hz=args.hz)
+    print(
+        f"Serving live gaze at ws://{args.host}:{args.port} "
+        f"(backend {_backend_of(args)}, profile {args.profile!r}) - Ctrl+C to stop.",
+        file=out,
+    )
+    try:
+        asyncio.run(server.serve_forever())
+    except KeyboardInterrupt:
+        print("\nStopped.", file=out)
+    finally:
+        source.close()
     return 0
 
 
@@ -1147,7 +1293,7 @@ def _cmd_setup(args: argparse.Namespace, out: TextIO) -> int:
     the user runs them.
     """
     from .assets import GAZE_MODEL, asset_path, ensure_all
-    from .diagnostics import check_onnx_provider
+    from .diagnostics import check_runtime
 
     backend = _backend_of(args)
     print(f"focusedgaze setup  (backend: {backend})\n", file=out)
@@ -1157,6 +1303,17 @@ def _cmd_setup(args: argparse.Namespace, out: TextIO) -> int:
     #    licence block twice in one run trains people to skim past it.
     reports = ensure_all(backend=backend)
     failures = _print_reports([r for r in reports if r.asset.auto_download], out)
+
+    # 2. The runtime, because a correct model on no runtime fails at the first
+    #    frame with a message about ONNX or OpenVINO rather than about setup.
+    #    Which runtime that is depends on the backend; see `check_runtime`.
+    runtime = check_runtime(backend)
+    print(f"{_MARK[runtime.status]} {runtime.name}: {runtime.summary}", file=out)
+    if runtime.remedy and runtime.status != "ok":
+        for line in _wrap(runtime.remedy):
+            print(line, file=out)
+    if runtime.status == "fail":
+        failures += 1
 
     # On the Intel backend the gaze model is one of those downloads, so the
     # whole of step 3 is already done and there is nothing to obtain by hand.
@@ -1169,16 +1326,6 @@ def _cmd_setup(args: argparse.Namespace, out: TextIO) -> int:
                 file=out,
             )
         return _setup_calibration_step(args, out, failures)
-
-    # 2. The provider, because a correct model on no provider fails at the first
-    #    frame with a message about ONNX rather than about setup.
-    provider = check_onnx_provider()
-    print(f"{_MARK[provider.status]} {provider.name}: {provider.summary}", file=out)
-    if provider.remedy and provider.status != "ok":
-        for line in _wrap(provider.remedy):
-            print(line, file=out)
-    if provider.status == "fail":
-        failures += 1
 
     # 3. The gaze graph: the one thing that is not fetched, and the one thing
     #    this command can genuinely shorten.
@@ -1505,6 +1652,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help="TCP port")
     serve.add_argument("--hz", type=float, default=DEFAULT_SEND_HZ, help="broadcast tick rate")
+    serve.add_argument(
+        "--profile",
+        help="calibration profile to serve. Required for the camera, ignored by "
+             "--replay, whose coordinates are already in the recording",
+    )
     serve.add_argument(
         "--replay", metavar="FILE",
         help="serve recorded [ok, x, y] readings from JSON instead of a camera",

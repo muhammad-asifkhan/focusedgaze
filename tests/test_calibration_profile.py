@@ -564,3 +564,121 @@ def test_migration_still_tolerates_a_pickle_without_a_held_out_error() -> None:
         migrated = migrate_pickle(path, name="absent")
 
     assert migrated.validation_error is None
+
+
+# ---------------------------------------------------------------------------
+# Which backend a profile was fitted against.
+# ---------------------------------------------------------------------------
+#
+# The failure this guards is the one this whole file is written around: a
+# polynomial applied to the wrong inputs does not raise, it returns a smooth
+# believable surface in the wrong place. The two gaze backends report different
+# (pitch, yaw) for the same eye -- L2CS decodes a softmax expectation over angle
+# bins, the Intel graph converts a direction vector -- so using a profile with
+# the other backend is exactly that error, arriving through configuration
+# rather than through a coding mistake.
+
+
+def _tiny_profile(**kw) -> CalibrationProfile:
+    """A valid degree-1 profile. The arithmetic is not the subject here."""
+    return CalibrationProfile(
+        degree=1,
+        powers=np.array([[1, 0], [0, 1]], dtype=np.int64),
+        coef_x=np.array([1.0, 0.0]),
+        coef_y=np.array([0.0, 1.0]),
+        intercept_x=0.5,
+        intercept_y=0.5,
+        **kw,
+    )
+
+
+def test_the_profile_backend_list_agrees_with_the_config_one() -> None:
+    """Two hand-copied tuples, deliberately not imported from each other.
+
+    `profile.py` is imported by `diagnostics`, which must not drag `config` in
+    behind it, so the names are repeated. Repetition is only safe while
+    something checks it, which is this.
+    """
+    from focusedgaze.calibration.profile import _BACKENDS as profile_backends
+    from focusedgaze.config import _BACKENDS as config_backends
+
+    assert profile_backends == config_backends
+
+
+def test_a_backend_stamp_survives_a_round_trip() -> None:
+    profile = _tiny_profile(backend="intel", name="stamped")
+    restored = CalibrationProfile.from_dict(json.loads(profile.to_json()))
+    assert restored.backend == "intel"
+
+
+def test_a_profile_written_before_the_field_existed_still_loads() -> None:
+    """The compatibility case, and the reason `backend` is optional.
+
+    Every profile anyone already has lacks this key while being perfectly valid
+    for whichever backend made it. Refusing them would destroy good calibrations
+    to enforce a record that did not exist when they were written.
+    """
+    document = json.loads(_tiny_profile(name="legacy").to_json())
+    del document["backend"]
+    restored = CalibrationProfile.from_dict(document)
+    assert restored.backend is None
+
+
+def test_an_unknown_backend_name_is_refused() -> None:
+    with pytest.raises(CalibrationError, match="unknown backend"):
+        _tiny_profile(backend="opencv")
+
+
+def test_a_matching_backend_draws_no_complaint() -> None:
+    assert _tiny_profile(backend="intel").backend_complaint("intel") is None
+
+
+def test_a_mismatched_backend_is_a_failure_naming_both_ways_out() -> None:
+    """Refused rather than warned about: the mapping would be wrong, not absent.
+
+    The message has to name both remedies. "Recalibrate" alone is bad advice for
+    somebody who simply invoked the wrong backend and still has a good profile.
+    """
+    complaint = _tiny_profile(backend="l2cs", name="mine").backend_complaint("intel")
+    assert complaint is not None
+    severity, message = complaint
+    assert severity == "fail"
+    assert "--backend l2cs" in message
+    assert "calibrate --backend intel" in message
+
+
+def test_an_unrecorded_backend_warns_rather_than_refusing() -> None:
+    """Unknown is not the same as wrong, and must not be reported as if it were."""
+    complaint = _tiny_profile(name="old").backend_complaint("intel")
+    assert complaint is not None
+    severity, message = complaint
+    assert severity == "warn"
+    assert "does not record" in message
+
+
+def test_no_backend_named_by_the_caller_means_no_opinion() -> None:
+    """A caller that has not selected a backend cannot have contradicted one."""
+    assert _tiny_profile(backend="l2cs").backend_complaint(None) is None
+
+
+def test_the_fitter_stamps_the_backend_it_was_told() -> None:
+    pytest.importorskip("sklearn", reason="fit_calibration needs scikit-learn")
+    samples = [
+        (0.1 * i, 0.05 * j, 0.1 * i + 0.5, 0.05 * j + 0.5)
+        for i in range(-3, 4)
+        for j in range(-3, 4)
+    ]
+    profile = fit_calibration(samples, name="fitted", backend="intel")
+    assert profile.backend == "intel"
+
+
+def test_the_fitter_leaves_it_unrecorded_when_not_told() -> None:
+    """Not defaulted to anything. A fabricated provenance is worse than none:
+    an unknown backend is warned about, a wrongly recorded one is trusted."""
+    pytest.importorskip("sklearn", reason="fit_calibration needs scikit-learn")
+    samples = [
+        (0.1 * i, 0.05 * j, 0.1 * i + 0.5, 0.05 * j + 0.5)
+        for i in range(-3, 4)
+        for j in range(-3, 4)
+    ]
+    assert fit_calibration(samples, name="fitted").backend is None
