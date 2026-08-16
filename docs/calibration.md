@@ -1,9 +1,14 @@
 # Calibration
 
-> **Status: not implemented.** Calibration lands in Phase 5 and is the highest-risk
-> numerical work in the migration. This page describes the routine as it exists in the
-> original system, which is what Phase 5 has to reproduce exactly. Commands shown as
-> `focusedgaze calibrate` do not exist yet.
+> **Status: shipped.** Interactive calibration landed in 0.1.0 and
+> `focusedgaze calibrate` runs. This page explains the routine and why each step
+> is the way it is; [getting-started.md](getting-started.md) Step 5 is the
+> shorter path if you only want to run it.
+>
+> A profile now also records **which gaze backend it was fitted against**, and
+> using it with the other one is refused rather than silently producing wrong
+> coordinates — the two models report different angles for the same eye. Profiles
+> written before 0.1.1 carry no such record and warn instead.
 
 ## Why you cannot skip it
 

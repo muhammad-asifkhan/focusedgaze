@@ -92,8 +92,13 @@ Google, and fetched from Google's own hosting with SHA-256 verification.
 focusedgaze download-models
 ```
 
-**The gaze model does not, and will not.** That command deliberately stops and prints
-instructions instead. The weights are an L2CS-Net model trained on the **Gaze360** dataset,
+**The default gaze model downloads too.** `gaze-estimation-adas-0002` is Apache-2.0,
+published by Intel in the Open Model Zoo, and fetched from Intel's own storage with SHA-256
+verification. On the default backend `download-models` finishes with nothing left to do.
+
+**The L2CS gaze model does not, and will not.** With `--backend l2cs` that command
+deliberately stops and prints instructions instead. The weights are an L2CS-Net model
+trained on the **Gaze360** dataset,
 whose authors restrict use of the dataset and code to non-commercial research. Weights
 trained on it are normally treated as a derived work carrying the same restriction, so
 focusedgaze does not distribute them, does not mirror them, and will not fetch them on your

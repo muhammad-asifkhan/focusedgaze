@@ -6,6 +6,92 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Engineering decisions and the reasoning behind them live in `MIGRATION_AUDIT.md`;
 this file records what changed, per phase.
 
+## [0.1.1]
+
+### Fixed
+- **Every documentation link on the PyPI project page.** All eleven links in the
+  0.1.0 description are repository-relative (`docs/getting-started.md`,
+  `NOTICE`, `LICENSE`, …). PyPI serves the description on `pypi.org`, where
+  those resolve against `pypi.org` and 404 — they only ever worked when read on
+  GitHub. They were rewritten to absolute URLs in `8a079bf`, but that commit
+  landed *after* the `v0.1.0` tag, and PyPI does not permit re-uploading a
+  version, so the fix could not reach 0.1.0 and this release is what carries it.
+  A test now asserts that no link in `README.md` is relative, because the
+  failure is invisible from inside the repository: on GitHub the broken form
+  renders perfectly.
+- **`Documentation` and `Changelog` added to `[project.urls]`**, which is the
+  PyPI sidebar. Those links are the only ones on the page that do not depend on
+  the description rendering, so they are worth having independently.
+
+### Changed
+- **The default gaze backend is now `intel`, not `l2cs`.** This is a bug fix
+  wearing a default's clothes. The L2CS weights derive from Gaze360 and this
+  package may not distribute, mirror or fetch them, by a licence decision that is
+  settled and correct. Defaulting to them meant a fresh install had no working
+  first run at all: `demo`, `serve`, `calibrate`, `accuracy` and `check` all
+  stopped at a licence notice instructing the user to obtain a 91 MB checkpoint
+  and convert it. Every example in `docs/getting-started.md` passed
+  `--backend intel` explicitly, which is why the dead end was invisible to
+  anyone already using the project. The Apache-2.0 backend downloads unprompted
+  and measured better besides — 1.43 cm against 1.96 cm, 2.0 ms against 141.7 ms.
+  **L2CS is unchanged and fully supported behind `--backend l2cs`;** existing
+  users who pass the flag, or who set `ModelConfig.backend`, see no difference.
+
+### Added
+- **`focusedgaze serve` now serves the camera.** It previously refused to run
+  without `--replay`, printing that the live source "is Phase 2 and is not
+  implemented yet" — a message that had been stale since Phase 2 landed. Every
+  piece existed (`WebcamGazeTracker` streams results, `GazeSource` is three
+  methods); nothing joined them, so a browser or Electron client could only ever
+  be driven by a recorded JSON file. New `focusedgaze.server.LiveGazeSource` is
+  that join, and `serve` uses it by default. `--replay` is unchanged and still
+  needs no profile.
+
+  Capture runs on its own thread publishing into a one-deep slot, because
+  `latest()` is called on the broadcaster tick and must not block — reading a
+  frame waits ~33 ms for the camera, which would couple the send rate to the
+  capture rate and stall the event loop for every client at once. A reading
+  older than `STALE_AFTER_S` (0.1 s) is reported `ok=False` rather than served
+  again: a slot that keeps its last good value turns a dead capture thread into
+  a frozen cursor that nothing reports as broken. `pause()`/`resume()` close and
+  rebuild the tracker, so giving up the camera actually releases the device.
+
+  `serve` gained `--profile`, and requires it for the camera: without a
+  calibration the pipeline has only raw angles, and the wire format has no field
+  for those, so every message would carry `ok: false`. Declining to start beats
+  serving a feed that can never report a position.
+- **Profiles record the backend they were calibrated against**, and using one
+  with the other backend is now refused instead of silently producing wrong
+  coordinates. The two models do not report the same angles for the same eye, so
+  a profile applied across them evaluates cleanly and lands somewhere else — the
+  class of failure this project keeps encountering. Checked in
+  `GazeEstimator.__init__`, where a profile and a model first meet, so the
+  library gets the same protection as the CLI. Profiles written before this
+  release carry no stamp; those **warn** rather than fail, because they are
+  valid for whichever backend made them and nothing can tell which.
+- **`FOCUSEDGAZE_BACKEND` sets the default backend for the CLI**, so choosing
+  the non-default one no longer costs a `--backend` on every invocation.
+  Precedence is flag, then variable, then the declared default; an unrecognised
+  value is refused by name rather than ignored, because a bad value there is
+  invisible on the command line. Read by `cli.py` and nowhere else: `config.py`
+  reads no environment, so `GazeConfig()` keeps meaning exactly what it says
+  rather than depending on the shell that launched the process.
+- **A refused profile now names one that would work.** When the active or
+  requested profile belongs to the other backend and a profile for the selected
+  backend already exists, `check`, `demo` and `accuracy` name it and print the
+  command to use it. Profiles with no recorded backend are never offered this
+  way — they might match and might not, and naming one would be a guess dressed
+  as an answer.
+- **`profiles_for_backend()`** in `calibration.profile`, which is how that
+  lookup is done.
+- **`focusedgaze check` verifies the inference runtime for the selected
+  backend.** It previously checked `onnxruntime` unconditionally, which meant an
+  install with the `intel` extra and no ONNX provider was reported as broken
+  when it was fine, and an install with the Intel *models* and no OpenVINO was
+  reported as healthy when it would raise on the first frame. `focusedgaze
+  setup` gained the same check on its Intel path, which previously skipped it
+  entirely.
+
 ## [0.1.0]
 
 The first release that does anything. `0.0.0` on PyPI is a placeholder — a 21 KB
@@ -28,7 +114,8 @@ PyPI never permits re-uploading a version.
   fetched automatically and digest-verified; the L2CS weights cannot be, because
   the Gaze360 licence names models trained on the dataset as covered derivative
   works and forbids distribution. L2CS remains the default so no existing
-  profile, fixture or measurement changes meaning.
+  profile, fixture or measurement changes meaning. *(Superseded in
+  [Unreleased]: that default left fresh installs with no working first run.)*
 - **`GazeEstimator.recentre()`** — a session offset measured from one centre dot.
   Across five runs the whole mapping shifted between sessions by −0.25 to +0.34 of
   screen height, twice on an identical profile minutes apart.

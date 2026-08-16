@@ -569,11 +569,25 @@ and no public function prints. Configuring output is the application's job.
 ## 9. The WebSocket server **[SHIPPED]**
 
 ```bash
-focusedgaze serve [--host HOST] [--port PORT] [--profile NAME]
+focusedgaze serve --profile NAME [--host HOST] [--port PORT] [--hz RATE]
+focusedgaze serve --replay readings.json          # no camera, no profile
 ```
 
 Requires the `server` extra. **Inputs:** a calibrated profile and a camera.
 **Outputs:** a WebSocket endpoint at `ws://localhost:8765`.
+
+`--profile` is required for the camera and is not defaulted: without a
+calibration the pipeline produces raw angles, the wire format has no field for
+those, and every message would carry `ok: false`. The command declines to start
+rather than serve a feed that can never report a position.
+
+`--replay` walks a recorded `[ok, x, y]` list over the identical wire format, so
+a client can be built and tested on a machine with no webcam. It needs no
+profile, because the coordinates are already in the recording.
+
+Readings **go stale rather than frozen**: if capture stops, messages turn
+`ok: false` within 0.1 s instead of repeating the last good point. A cursor that
+has stopped updating is diagnosable; one frozen at a plausible position is not.
 
 ### Messages emitted
 

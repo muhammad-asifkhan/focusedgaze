@@ -49,7 +49,14 @@ classifiers = [
 ]
 
 [project.urls]
+# These become the sidebar on the PyPI project page, and they are the only
+# links there that do not depend on the README rendering correctly. Absolute
+# and branch-qualified for the same reason every link in README.md is: PyPI
+# serves the description on pypi.org, where a repository-relative path resolves
+# against pypi.org and 404s.
 Homepage = "https://github.com/muhammad-asifkhan/focusedgaze"
+Documentation = "https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/getting-started.md"
+Changelog = "https://github.com/muhammad-asifkhan/focusedgaze/blob/main/CHANGELOG.md"
 Source = "https://github.com/muhammad-asifkhan/focusedgaze"
 Issues = "https://github.com/muhammad-asifkhan/focusedgaze/issues"
 

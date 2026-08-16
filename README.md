@@ -13,11 +13,11 @@ screen coordinate.
 > pipeline **bit-identically** on 60 recorded frames. See
 > [MIGRATION_AUDIT.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/MIGRATION_AUDIT.md) §49.
 >
-> **Two gaze backends.** Intel's `gaze-estimation-adas-0002` is Apache-2.0, downloads
-> automatically, and was measured at **2.0 ms per frame on a plain CPU**. L2CS-Net is the
-> default for backward compatibility but its weights derive from Gaze360 and cannot be
-> redistributed, so you must fetch them yourself. Pass `--backend intel` to use the one
-> that just works.
+> **Two gaze backends.** Intel's `gaze-estimation-adas-0002` is the default: Apache-2.0,
+> downloads automatically, and measured at **2.0 ms per frame on a plain CPU** and 1.43 cm
+> of error. L2CS-Net remains fully supported behind `--backend l2cs`, but its weights derive
+> from Gaze360 and cannot be redistributed, so you must fetch and convert them yourself —
+> which is why it is not the default. A fresh install works with no manual model step.
 >
 > **New here?** Read
 > [docs/getting-started.md](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/docs/getting-started.md).
@@ -65,10 +65,15 @@ your screen is, how far away you sit, and your face. A calibration is specific t
 person, one machine, and roughly one seating position. Someone else sitting down in your
 chair will get bad results until they calibrate for themselves.
 
-**The gaze model weights, which you fetch yourself.** focusedgaze will not download them.
-They derive from the Gaze360 dataset, which its authors restrict to non-commercial research
-use, so this project does not distribute or mirror them. This is a deliberate refusal, not
-a missing feature. See [Licence](#licence) below, and read [NOTICE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/NOTICE) before you use
+**Model files — fetched for you on the default backend.** `focusedgaze setup` downloads
+the face landmarker and the Intel gaze model, both Apache-2.0, both digest-verified. There
+is no manual step and nothing to license.
+
+**Unless you choose `--backend l2cs`, whose weights you fetch yourself.** focusedgaze will
+not download those. They derive from the Gaze360 dataset, which its authors restrict to
+non-commercial research use, so this project does not distribute or mirror them. This is a
+deliberate refusal, not a missing feature — and it is the reason that backend is not the
+default. See [Licence](#licence) below, and read [NOTICE](https://github.com/muhammad-asifkhan/focusedgaze/blob/main/NOTICE) before you use
 this commercially.
 
 ## Install

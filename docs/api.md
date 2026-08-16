@@ -127,19 +127,42 @@ save the result.
 
 ---
 
-## Not implemented yet
+## Everything on this page exists
 
-| Name | Phase | Notes |
+This section used to be a "Not implemented yet" table listing `GazeEstimator`,
+the landmark and model wrappers, the result types, the exception tree, the
+capture layer, calibration, every CLI command and the WebSocket server. **All of
+it shipped.** The table was left behind after the header above was rewritten to
+say the split had been removed, so the page spent a release contradicting
+itself — and a reader deciding whether to adopt the package would have believed
+the table, because a specific list reads as more authoritative than a general
+claim.
+
+Nothing is deferred to a later phase. What is genuinely absent is recorded in
+`docs/getting-started.md` under "What this cannot do", which is about the
+limits of webcam gaze rather than about unfinished work.
+
+## Added since 0.1.0
+
+Names that exist and are not yet written up in full below. Module docstrings are
+authoritative.
+
+| Name | Module | What it is |
 |---|---|---|
-| `GazeEstimator` | 2 | `process(frame, timestamp) -> GazeResult`, no I/O |
-| `focusedgaze.core.landmarks` | 2 | MediaPipe wrapper and face crop |
-| `focusedgaze.core.model` | 2 | ONNX session and the pitch/yaw decode |
-| `GazeResult`, `GazeStatus` | 3 | Result types |
-| The exception tree | 3 | Named errors instead of bare `ImportError` |
-| `WebcamGazeTracker`, `VideoFileSource` | 4 | Capture layer |
-| `CalibrationProfile` and fitting | 5 | Highest-risk numerical work |
-| Asset download, all CLI commands | 6 | `download-models`, `calibrate`, `check`, `serve`, `demo`, `export-onnx` |
-| WebSocket server | 7 | `server` extra |
+| `LiveGazeSource` | `focusedgaze.server` | The camera behind `GazeServer`, satisfying `GazeSource`. What `focusedgaze serve` now runs by default. |
+| `STALE_AFTER_S` | `focusedgaze.server` | How old a reading may be before `latest()` reports it unusable. |
+| `CalibrationProfile.backend` | `focusedgaze.calibration` | Which gaze backend the profile was fitted against. `None` on profiles written before 0.1.1. |
+| `CalibrationProfile.backend_complaint()` | `focusedgaze.calibration` | `(severity, message)` when a profile and a backend disagree, else `None`. |
+| `profiles_for_backend()` | `focusedgaze.calibration.profile` | Names of saved profiles matching a backend. Excludes unstamped ones. |
+| `check_runtime()`, `check_openvino()` | `focusedgaze.diagnostics` | The inference-runtime check, dispatched per backend. |
+
+Two behaviour changes worth knowing when reading older code:
+
+- **`ModelConfig.backend` now defaults to `"intel"`**, not `"l2cs"`. See
+  `docs/getting-started.md` Step 2.
+- **`GazeEstimator.__init__` raises `CalibrationError`** when the profile was
+  calibrated against a different backend, and logs a warning when the profile
+  records no backend at all.
 
 ## Thread safety
 

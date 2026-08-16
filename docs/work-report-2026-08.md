@@ -104,6 +104,14 @@ is wired through `download-models`, `setup`, `check`, `calibrate`, `accuracy`,
 `demo` and `serve`. The asset registry is backend-aware, so `check` reports the
 model you selected rather than failing on one you have no reason to own.
 
+> **Superseded.** That default was wrong and was changed to `intel` shortly
+> after this report. Preserving the meaning of existing fixtures traded away the
+> only thing a new user has: L2CS weights may not be fetched by this package at
+> all, so defaulting to them meant every model-loading command on a fresh
+> install ended at a licence notice and a 91 MB manual conversion. The fixtures
+> that needed L2CS now name it explicitly, which is where that requirement
+> belonged. See `assets/registry.py::DEFAULT_BACKEND`.
+
 **Accuracy of the Intel backend is unmeasured.** Its published 6.95° is on
 Intel's own validation set and is not comparable with L2CS's Gaze360 figure. The
 eye-crop geometry in `core/eyes.py` is a chosen convention and may need tuning.

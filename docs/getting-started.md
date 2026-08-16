@@ -46,20 +46,30 @@ Two extras, and both are needed for this guide:
 focusedgaze can drive two different gaze models. **Pick one now**, because a
 calibration made against one does not work with the other.
 
-| | **Intel** (recommended) | **L2CS** |
+| | **Intel** (default) | **L2CS** |
 |---|---|---|
 | Licence | Apache-2.0 — redistributable | Gaze360 — non-commercial research, **cannot be redistributed** |
 | Download | Automatic | You fetch it by hand |
 | Size | 7.5 MB | 91 MB |
 | Speed (measured, AMD integrated) | **2.0 ms** | 141.7 ms |
+| Accuracy (measured, same screen) | **1.43 cm** | 1.96 cm |
 | Needs a GPU | No | Benefits from one |
+| Extra required | `intel` (OpenVINO) | one of `directml` / `cuda` / `cpu` |
 
-**Choose Intel unless you have a specific reason not to.** It is the only one
-that can ship inside an application you distribute.
+**Intel is the default, and you probably want to leave it there.** It is the
+only one that can ship inside an application you distribute, and the only one a
+fresh install can reach without a manual conversion step.
 
-Every command below takes `--backend intel` or `--backend l2cs`. There is
-currently **no config file for this** — pass the flag each time, or set it in
-Python (see Step 8).
+Every command below takes `--backend intel` or `--backend l2cs`. The flag is
+shown explicitly throughout this guide so that each command reads
+unambiguously, but **`--backend intel` is what you get by omitting it.** To make
+the other one your default without typing the flag every time, set
+`FOCUSEDGAZE_BACKEND` — see Step 9. In Python, see Step 8.
+
+A profile records which backend it was calibrated against, and the two are not
+interchangeable — running with the other one is refused rather than silently
+producing wrong coordinates. Profiles made before 0.1.1 carry no such record
+and produce a warning instead; recalibrate to clear it.
 
 ---
 
@@ -281,6 +291,50 @@ This matters more than the model. From measured error:
 precision; it feels good because of large targets and dwell feedback, not
 because the sensor is better.
 
+### If your app is not Python
+
+Serve the camera over WebSocket and read it from anything — a browser page,
+Electron, Unity, another language:
+
+```powershell
+focusedgaze serve --profile me
+```
+
+```
+Serving live gaze at ws://localhost:8765 (backend intel, profile 'me') - Ctrl+C to stop.
+```
+
+Then in the browser:
+
+```javascript
+const ws = new WebSocket("ws://localhost:8765");
+ws.onmessage = (e) => {
+  const m = JSON.parse(e.data);
+  if (m.type === "gaze" && m.ok) {
+    moveCursor(m.x, m.y);        // fractions of the screen, origin top-left
+  }
+};
+```
+
+**Keep the `if (m.ok)` guard.** When there is no face, `x` and `y` are `null`,
+never a stale point — your last good position is yours to hold. The full
+contract, including the `input` message and the `mode` command, is in
+[wire_format.md](wire_format.md).
+
+A few things worth knowing:
+
+- **`--profile` is required** for the camera. Without a calibration there are no
+  screen coordinates to send, only raw angles, so every message would say
+  `ok: false`. The command declines to start rather than serve that.
+- **Readings go stale, not frozen.** If the camera stops delivering, messages
+  turn `ok: false` within 0.1 s instead of repeating the last good point — a
+  frozen cursor that looks alive is worse than a cursor that stops.
+- **Bind to loopback.** The stream is unauthenticated. `--host` exists, but
+  anything other than `localhost` puts your gaze on the network.
+- **Developing without a camera?** `focusedgaze serve --replay readings.json`
+  walks a recorded `[ok, x, y]` list over the identical wire format, so a client
+  can be built and tested on a machine that has no webcam.
+
 ---
 
 ## Step 9 — Changing models and weights
@@ -293,7 +347,42 @@ focusedgaze demo      --backend l2cs --profile me-l2cs
 ```
 
 **You must recalibrate.** The two models have different angle conventions; a
-profile from one produces nonsense with the other.
+profile from one produces nonsense with the other. This is now enforced rather
+than merely warned about — using a profile with the wrong backend is refused,
+and if you already have one for the backend you asked for, the error names it:
+
+```
+error: profile 'me-l2cs' was calibrated against the 'l2cs' backend and cannot
+be used with 'intel'. ...
+
+Already calibrated for intel: me-intel.
+    focusedgaze demo --profile me-intel
+```
+
+Profiles made before 0.1.1 record no backend. Those warn instead of failing —
+nothing can tell which model made them, so refusing them would throw away
+calibrations that are probably fine. Recalibrate to clear the warning.
+
+### Make a backend the default
+
+To stop typing `--backend` on every command, set the environment variable:
+
+```powershell
+setx FOCUSEDGAZE_BACKEND "l2cs"     # persists; reopen the terminal
+$env:FOCUSEDGAZE_BACKEND = "l2cs"   # this session only
+```
+
+Precedence is `--backend` > `FOCUSEDGAZE_BACKEND` > `intel`. The flag always
+wins, so a one-off run needs no unsetting. An unrecognised value is refused by
+name rather than ignored:
+
+```
+error: FOCUSEDGAZE_BACKEND='opencv' is not a gaze backend; expected one of l2cs, intel
+```
+
+This affects the `focusedgaze` command only. The Python API reads no
+environment: `GazeConfig()` always means what it says, and you select a backend
+there with `GazeConfig(model=ModelConfig(backend="l2cs"))` as in Step 8.
 
 ### Where the files live
 

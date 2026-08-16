@@ -32,26 +32,49 @@ looking at.**
 | OS | Windows (the only tested platform). Linux and macOS are structurally supported, untested. |
 | Provider | Pick one: `directml` (Windows GPU), `cuda` (NVIDIA), or `cpu`. |
 
-### 3. Two model files
+### 3. Model files
 
 **These are not included in the package.** The wheel stays small on purpose.
+On the default backend, **all of them download automatically** and there is no
+manual step:
 
 | File | Size | How you get it |
 |---|---|---|
 | `face_landmarker.task` | 3.8 MB | **Downloads automatically.** Apache-2.0. |
+| `gaze-estimation-adas-0002.xml` + `.bin` | 7.5 MB | **Downloads automatically.** Apache-2.0, Intel. |
+
+```powershell
+focusedgaze setup      # fetches everything, then tells you to calibrate
+```
+
+That is the whole model story for most people. The paragraph below applies only
+if you deliberately choose the other backend.
+
+#### If you choose `--backend l2cs`
+
+L2CS-Net is the alternative gaze model. It is slightly *less* accurate here
+(1.96 cm against 1.43 cm) and far slower (141.7 ms against 2.0 ms), so it is not
+the default and most users have no reason to want it. It also cannot be
+downloaded:
+
+| File | Size | How you get it |
+|---|---|---|
 | Gaze model (ONNX) | ~91 MB | **You fetch this yourself.** The tool prints instructions and stops. |
 
-The gaze model is obtained once by one person: download `L2CSNet_gaze360.pkl` from the
+Obtained once by one person: download `L2CSNet_gaze360.pkl` from the
 [official L2CS-Net distribution](https://github.com/Ahmednull/L2CS-Net) and run
-`focusedgaze setup --weights <path>`. The resulting `.onnx` is **portable** — the
-execution provider is chosen at load time, so the same file works on another GPU vendor
-or another OS. Everyone else runs `focusedgaze setup --onnx <path>`, or points
-`FOCUSEDGAZE_MODEL_DIR` at a shared copy, and needs neither torch nor the download.
+`focusedgaze setup --backend l2cs --weights <path>`. The resulting `.onnx` is
+**portable** — the execution provider is chosen at load time, so the same file
+works on another GPU vendor or another OS. Everyone else runs
+`focusedgaze setup --backend l2cs --onnx <path>`, or points
+`FOCUSEDGAZE_MODEL_DIR` at a shared copy, and needs neither torch nor the
+download.
 
-The second one is not laziness. Those weights come from the Gaze360 dataset,
+That refusal is not laziness. Those weights come from the Gaze360 dataset,
 which is **non-commercial research only**. The package will not download or
 redistribute them for you. If your use is commercial, resolve the licence before
-going further, not after.
+going further, not after — or simply stay on the default backend, which is
+Apache-2.0 and carries no such restriction.
 
 ### 4. A calibration, per person
 

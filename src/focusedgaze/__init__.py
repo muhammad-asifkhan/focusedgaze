@@ -48,7 +48,7 @@ logger and configuring it is the application's job.
 from __future__ import annotations
 
 # Single source of truth for the version; pyproject reads it via hatch (D6).
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .calibration import (
     CalibrationCollector,
