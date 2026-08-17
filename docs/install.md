@@ -80,6 +80,41 @@ CI proves the pure computation runs and produces identical numbers on Linux, whi
 evidence the platform abstractions are not imaginary. Nobody has pointed a camera at a
 non-Windows machine, so only Windows is claimed.
 
+### NixOS
+
+`pip install` succeeds and then **every import fails**:
+
+```
+ImportError: libstdc++.so.6: cannot open shared object file: No such file or directory
+```
+
+raised from inside numpy's C extension. It reads like a broken numpy and is not one.
+Nothing is wrong with the install: numpy, opencv-python, mediapipe, openvino and
+scikit-learn all ship as manylinux wheels linked against libraries at FHS paths, and NixOS
+has no `/usr/lib` to find them in. No amount of reinstalling changes it, because the wheels
+are correct and the loader is what is missing a library.
+
+Use the FHS shell in the repository root:
+
+```bash
+nix-shell                                       # provides /usr/lib and Python 3.12
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[intel,calibration,server]"
+focusedgaze setup && focusedgaze check
+```
+
+Re-enter with `nix-shell` each session; the venv persists between them.
+
+Use **Python 3.12**, not 3.13, unless you are deliberately testing it. `requires-python`
+permits 3.13, but mediapipe has historically lagged new Python releases and a missing wheel
+means a source build, which is a far longer detour than this shell exists to save you.
+
+The alternative is system-level and equally correct: `programs.nix-ld.enable = true` in
+`configuration.nix`, with `stdenv.cc.cc.lib` and the OpenCV libraries in
+`programs.nix-ld.libraries`. That needs a rebuild and root; `shell.nix` needs neither and
+travels with the project.
+
 ## Model weights
 
 Two model files, treated completely differently, and the difference is legal rather than
